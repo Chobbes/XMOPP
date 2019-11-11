@@ -1,4 +1,16 @@
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
+import Data.Conduit.Network
+
+xmppPort :: Int
+xmppPort = 5222
+
+settings :: ServerSettings
+settings = serverSettings xmppPort "*"
+
+handleClient :: AppData -> IO ()
+handleClient ad = putStrLn "connected"
+
 main :: IO ()
-main = putStrLn "Hello, Haskell!"
+main = runTCPServer settings handleClient
