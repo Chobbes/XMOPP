@@ -38,8 +38,9 @@ startTLS ad = runConduit $ do
 
 handleClient :: AppData -> IO ()
 handleClient ad = runConduit $ do
-  liftIO $ putStrLn "New TLS connection."
   stream <- appSource ad .| parseBytes def .| awaitStream
+  liftIO $ putStrLn "New TLS connection."
+  yield authResp .| appSink ad
   liftIO $ print stream
   appSource ad .| parseBytes def .| awaitForever (lift . print)
   liftIO $ putStrLn "wah"
@@ -61,6 +62,23 @@ streamResp =
 \ <starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"> \
 \ <required /> \
 \ </starttls> \
+\ </features>"
+
+authResp =
+  "<?xml version='1.0'?> \
+\      <stream:stream  \
+\          from='localhost'  \
+\          id='FOO++TR84Sm6A3hnt3Q065SnAbbk3Y=' \
+\          version='1.0'  \
+\          xml:lang='en'  \
+\          xmlns='jabber:client'  \
+\          xmlns:stream='http://etherx.jabber.org/streams'> \
+\ <features xml:lang='en'  \
+\           xmlns='jabber:client'  \
+\           xmlns:stream='http://etherx.jabber.org/streams'> \
+\ <mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"> \
+\ <mechanism>PLAIN</mechanism> \
+\ </mechanisms> \
 \ </features>"
 
 awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
