@@ -1,0 +1,39 @@
+* Core Tenants
+
+  - Try to be modular. Each XEP should essentially be a plugin, and we
+    should make it easy to modify the server to support more XEPS...
+    + Preferably we expose a library and people can add their own
+      hooks to the server.
+    + Plugins should be able to access the XMPP XML stream and hook
+      into it.
+
+* Resources for Development
+
+** XMPP resources
+
+  - [[https://xmpp.org/extensions/xep-0423.html][XMPP Compliance Suite 2020]]
+    + Useful map of features we need to implement
+    + Shooting for core server
+      * May not do mobile compliance. Phones don't matter :).
+      * Also might not be too hard, though.
+    + This is essentially our high level todo list.
+
+** Haskell Libraries
+
+*** Networking / Streaming
+
+    - Using conduit for network streams
+    - xml-conduit for parsing XML
+      + Not sure this is a great fit.
+
+*** Database
+
+    - Maybe we should use persistent?
+
+** TLS
+
+   You might want to grab your own self-signed certificates for testing:
+
+   #+begin_src bash
+     openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes
+   #+end_src
