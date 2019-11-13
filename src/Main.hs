@@ -18,6 +18,7 @@ import Data.Conduit.List as CL
 import Data.Char
 import qualified Data.ByteString as BS
 import Data.ByteString.Base64 (decodeLenient)
+import Data.Maybe
 
 xmppPort :: Int
 xmppPort = 5222
@@ -39,6 +40,7 @@ startTLS ad = runConduit $ do
   yield "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" .| appSink ad
   liftIO $ putStrLn "Closing unencrypted channel."
 
+-- | Todo, figure out how to allow for stream restarts at any point.
 handleClient :: AppData -> IO ()
 handleClient ad = runConduit $ do
   stream <- appSource ad .| parseBytes def .| awaitStream
@@ -47,11 +49,16 @@ handleClient ad = runConduit $ do
   liftIO $ print stream
   auth <- appSource ad .| parseBytes def .| awaitAuth
   liftIO $ print auth
+  -- TODO. Fix this. Just accepts, lol.
+  yield "<success xmlns='urn:ietf:params:xml:ns:xmpp-sasl'></success>" .| appSink ad
+  stream <- appSource ad .| parseBytes def .| awaitStream
+  liftIO $ print stream
+  yield (streamResp' (encodeUtf8 . fst $ fromJust auth)) .| appSink ad  -- TODO: Get rid of fromJust
   appSource ad .| parseBytes def .| awaitForever (lift . print)
   liftIO $ putStrLn "wah"
 
-
 -- TODO fix this. Generate id randomly.
+streamResp :: BS.ByteString
 streamResp =
   "<?xml version='1.0'?> \
 \      <stream:stream  \
@@ -68,6 +75,43 @@ streamResp =
 \ <required /> \
 \ </starttls> \
 \ </features>"
+
+-- Escape jid?
+streamResp' :: BS.ByteString -> BS.ByteString
+streamResp' to =
+  "<?xml version='1.0'?> \
+\      <stream:stream \
+\          from='localhost' \
+\          id='TR84Sm6A3hnt3Q065SnAbbk3Y=' \
+\          version='1.0' \
+\          xml:lang='en' \
+\          xmlns='jabber:client' \
+\          xmlns:stream='http://etherx.jabber.org/streams'> \
+\ <features xmlns=\"http://etherx.jabber.org/streams\"> \
+\ <c hash=\"sha-1\" xmlns=\"http://jabber.org/protocol/caps\" ver=\"pp/B5UZAFTyIuLCYMfy+HDg8MSk=\" node=\"http://prosody.im\" /> \
+\ <sm xmlns=\"urn:xmpp:sm:2\"> \
+  \ <optional /> \
+  \ </sm> \
+  \ <sm xmlns=\"urn:xmpp:sm:3\"> \
+  \ <optional /> \
+  \ </sm> \
+  \ <csi xmlns=\"urn:xmpp:csi:0\" /> \
+  \ <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"> \
+  \ <required /> \
+  \ </bind> \
+  \ <session xmlns=\"urn:ietf:params:xml:ns:xmpp-session\"> \
+  \ <optional /> \
+  \ </session> \
+  \ <ver xmlns=\"urn:xmpp:features:rosterver\" /> \
+  \ </features>"
+
+-- \ <features xml:lang='en'  \
+-- \           xmlns='jabber:client'  \
+-- \           xmlns:stream='http://etherx.jabber.org/streams'> \
+-- \ <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"> \
+-- \ <required /> \
+-- \ </bind> \
+-- \ </features>"
 
 authResp =
   "<?xml version='1.0'?> \
