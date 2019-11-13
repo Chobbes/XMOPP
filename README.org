@@ -18,6 +18,23 @@
       * Also might not be too hard, though.
     + This is essentially our high level todo list.
 
+*** Clients
+
+    - https://gajim.org/
+      + Bit of a pain to install, but lots of functionality.
+      + Has an XML console: Accounts -> Advanced -> XML Console
+        * You can see all of the XML that goes between the client and the server.
+        * Useful for debugging
+    - https://dino.im/
+      + Another client which may be easier to install should gajim not work.
+
+*** Example server
+
+    Might be useful for testing / looking at XML streams, feel free to
+    make an account:
+
+    - https://chat.typesofnote.com/
+
 ** Haskell Libraries
 
 *** Networking / Streaming
