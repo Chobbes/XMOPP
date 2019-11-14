@@ -19,6 +19,14 @@ import Data.Char
 import qualified Data.ByteString as BS
 import Data.ByteString.Base64 (decodeLenient)
 import Data.Maybe
+import Data.UUID
+import System.Random
+
+version :: Text
+version = "1.0"
+
+fqdn :: Text
+fqdn = "localhost"
 
 xmppPort :: Int
 xmppPort = 5222
@@ -33,7 +41,9 @@ startTLS :: AppData -> IO ()
 startTLS ad = runConduit $ do
   stream <- appSource ad .| parseBytes def .| awaitStream
   liftIO $ putStrLn "New connection"
-  yield streamResp .| appSink ad
+  streamId <- liftIO randomIO
+  streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| appSink ad
+  featuresTLS  .| XR.renderBytes def .| appSink ad
   liftIO $ putStrLn "Awaiting TLS"
   starttls <- appSource ad .| parseBytes def .| awaitStartTls
   liftIO $ putStrLn "Sending TLS proceed"
@@ -56,6 +66,42 @@ handleClient ad = runConduit $ do
   yield (streamResp' (encodeUtf8 . fst $ fromJust auth)) .| appSink ad  -- TODO: Get rid of fromJust
   appSource ad .| parseBytes def .| awaitForever (lift . print)
   liftIO $ putStrLn "wah"
+
+-- runConduit $ streamRespXML "localhost" "en" "eoauthoahu" .| XR.renderText def .| await
+streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
+streamRespHeader from lang streamId = do
+  yield $ EventBeginElement streamName attrs
+  where attrs = [ at "from" from
+                , at "version" version
+                , at "id" (toText streamId)
+                , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang])
+                ]
+        at name content = (Name name Nothing Nothing, [ContentText content])
+        streamName = Name "stream"
+                          (Just "http://etherx.jabber.org/streams")
+                          (Just "stream")
+
+features :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
+features children = XR.tag featureName mempty children
+  where
+    featureName = Name "features" (Just "http://etherx.jabber.org/streams") (Just "stream")
+
+featuresTLS :: Monad m => ConduitT i Event m ()
+featuresTLS = features tlsFeature
+  where
+    tlsFeature = XR.tag tlsName (XR.attr "xmlns" "jabber:client") required
+    tlsName    = Name "starttls" (Just "urn:ietf:params:xml:ns:xmpp-tls")
+                                 (Just "stream")
+    required   = XR.tag "required" mempty (return ())
+
+-- \ <features xml:lang='en'  \
+-- \           xmlns='jabber:client'  \
+-- \           xmlns:stream='http://etherx.jabber.org/streams'> \
+-- \ <starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"> \
+-- \ <required /> \
+-- \ </starttls> \
+-- \ </features>"
+
 
 -- TODO fix this. Generate id randomly.
 streamResp :: BS.ByteString
@@ -155,6 +201,14 @@ awaitAuth = do
     case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
       [_, user, pass] -> return (user, pass)
       _               -> Nothing
+
+awaitBind :: MonadThrow m => ConduitT Event a m (Maybe Text)
+awaitBind = undefined
+--   <iq type="set" id="78d817dd-7058-46bc-a752-45e8079215d8">
+-- <bind xmlns="urn:ietf:params:xml:ns:xmpp-bind">
+-- <resource>gajim.MGATHP3J</resource>
+-- </bind>
+-- </iq>
 
 -- <auth xmlns="urn:ietf:params:xml:ns:xmpp-sasl" mechanism="PLAIN">AHRlc3QAZm9vYmFy</auth>
 
