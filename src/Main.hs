@@ -47,16 +47,23 @@ initiateStream sink = do
     streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
     return streamId
 
+-- | Open a stream.
+openStream
+  :: (MonadThrow m, PrimMonad m, MonadIO m) =>
+     ConduitM a BS.ByteString m () ->
+     ConduitT BS.ByteString c m r ->
+     ConduitT a c m (Maybe Event)
+openStream source sink = do
+  stream <- source .| parseBytes def .| awaitStream
+  initiateStream $ sink
+  return stream
+
 
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
 startTLS :: AppData -> IO ()
 startTLS ad = runConduit $ do
-  stream <- appSource ad .| parseBytes def .| awaitStream
-  liftIO $ putStrLn "New connection"
-
-  -- Send initial stream header in response
-  initiateStream $ appSink ad
+  openStream (appSource ad) (appSink ad)
 
   -- Send StartTLS feature.
   featuresTLS  .| XR.renderBytes def .| appSink ad
@@ -74,21 +81,33 @@ startTLS ad = runConduit $ do
 -- This should be architected more like a state machine.
 handleClient :: AppData -> IO ()
 handleClient ad = runConduit $ do
-  stream <- appSource ad .| parseBytes def .| awaitStream
-  liftIO $ putStrLn "New TLS connection."
-  yield authResp .| appSink ad
-  liftIO $ print stream
-  auth <- appSource ad .| parseBytes def .| awaitAuth
+  openStream (appSource ad) (appSink ad)
+
+  -- Get user and pass
+  auth <- plainAuth (appSource ad) (appSink ad)
   liftIO $ print auth
-  -- TODO. Fix this. Just accepts, lol.
+
+  -- TODO. Fix this. Just accepts any user/pass, lol.
   yield "<success xmlns='urn:ietf:params:xml:ns:xmpp-sasl'></success>" .| appSink ad
-  stream <- appSource ad .| parseBytes def .| awaitStream
-  liftIO $ print stream
-  yield (streamResp' (encodeUtf8 . fst $ fromJust auth)) .| appSink ad  -- TODO: Get rid of fromJust
+
+  -- Restart stream and present bind feature.
+  openStream (appSource ad) (appSink ad)
+  bindFeatures .| XR.renderBytes def .| appSink ad
+
   appSource ad .| parseBytes def .| awaitForever (lift . print)
   liftIO $ putStrLn "wah"
 
--- runConduit $ streamRespXML "localhost" "en" "eoauthoahu" .| XR.renderText def .| await
+-- | Get authentication information.
+plainAuth
+  :: (PrimMonad m, MonadThrow m) =>
+     ConduitM a1 BS.ByteString m ()
+     -> ConduitM BS.ByteString c m a2
+     -> ConduitT a1 c m (Maybe (Text, Text))
+plainAuth source sink = do
+  authFeatures .| XR.renderBytes def .| sink
+  source .| parseBytes def .| awaitAuth
+
+
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId = do
   yield $ EventBeginElement streamName attrs
@@ -113,89 +132,24 @@ featuresTLS = features tlsFeature
     tlsFeature = XR.tag tlsName (XR.attr "xmlns" "jabber:client") required
     tlsName    = Name "starttls" (Just "urn:ietf:params:xml:ns:xmpp-tls")
                                  (Just "stream")
-    required   = XR.tag "required" mempty (return ())
 
--- \ <features xml:lang='en'  \
--- \           xmlns='jabber:client'  \
--- \           xmlns:stream='http://etherx.jabber.org/streams'> \
--- \ <starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"> \
--- \ <required /> \
--- \ </starttls> \
--- \ </features>"
+required :: Monad m => ConduitT i Event m ()
+required = XR.tag "required" mempty (return ())
 
+bindFeatures :: Monad m => ConduitT i Event m ()
+bindFeatures = features bind
+  where
+    bind = XR.tag bindName mempty required
+    bindName = Name "bind" (Just "urn:ietf:params:xml:ns:xmpp-bind") Nothing
 
--- TODO fix this. Generate id randomly.
-streamResp :: BS.ByteString
-streamResp =
-  "<?xml version='1.0'?> \
-\      <stream:stream  \
-\          from='localhost'  \
-\          id='FOO++TR84Sm6A3hnt3Q065SnAbbk3Y=' \
-\          version='1.0'  \
-\          xml:lang='en'  \
-\          xmlns='jabber:client'  \
-\          xmlns:stream='http://etherx.jabber.org/streams'> \
-\ <features xml:lang='en'  \
-\           xmlns='jabber:client'  \
-\           xmlns:stream='http://etherx.jabber.org/streams'> \
-\ <starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"> \
-\ <required /> \
-\ </starttls> \
-\ </features>"
-
--- Escape jid?
-streamResp' :: BS.ByteString -> BS.ByteString
-streamResp' to =
-  "<?xml version='1.0'?> \
-\      <stream:stream \
-\          from='localhost' \
-\          id='TR84Sm6A3hnt3Q065SnAbbk3Y=' \
-\          version='1.0' \
-\          xml:lang='en' \
-\          xmlns='jabber:client' \
-\          xmlns:stream='http://etherx.jabber.org/streams'> \
-\ <features xmlns=\"http://etherx.jabber.org/streams\"> \
-\ <c hash=\"sha-1\" xmlns=\"http://jabber.org/protocol/caps\" ver=\"pp/B5UZAFTyIuLCYMfy+HDg8MSk=\" node=\"http://prosody.im\" /> \
-\ <sm xmlns=\"urn:xmpp:sm:2\"> \
-  \ <optional /> \
-  \ </sm> \
-  \ <sm xmlns=\"urn:xmpp:sm:3\"> \
-  \ <optional /> \
-  \ </sm> \
-  \ <csi xmlns=\"urn:xmpp:csi:0\" /> \
-  \ <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"> \
-  \ <required /> \
-  \ </bind> \
-  \ <session xmlns=\"urn:ietf:params:xml:ns:xmpp-session\"> \
-  \ <optional /> \
-  \ </session> \
-  \ <ver xmlns=\"urn:xmpp:features:rosterver\" /> \
-  \ </features>"
-
--- \ <features xml:lang='en'  \
--- \           xmlns='jabber:client'  \
--- \           xmlns:stream='http://etherx.jabber.org/streams'> \
--- \ <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"> \
--- \ <required /> \
--- \ </bind> \
--- \ </features>"
-
-authResp =
-  "<?xml version='1.0'?> \
-\      <stream:stream  \
-\          from='localhost'  \
-\          id='FOO++TR84Sm6A3hnt3Q065SnAbbk3Y=' \
-\          version='1.0'  \
-\          xml:lang='en'  \
-\          xmlns='jabber:client'  \
-\          xmlns:stream='http://etherx.jabber.org/streams'> \
-\ <features xml:lang='en'  \
-\           xmlns='jabber:client'  \
-\           xmlns:stream='http://etherx.jabber.org/streams'> \
-\ <mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"> \
-\ <mechanism>PLAIN</mechanism> \
-\ </mechanisms> \
-\ </features>"
+authFeatures :: Monad m => ConduitT i Event m ()
+authFeatures = features mechanisms
+  where
+    mechanisms = XR.tag mechanismsName mempty plain
+    mechanismsName = Name "mechanisms"
+                          (Just "urn:ietf:params:xml:ns:xmpp-sasl")
+                          Nothing
+    plain = XR.tag "mechanism" mempty (XR.content "PLAIN")
 
 awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
