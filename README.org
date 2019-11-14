@@ -1,4 +1,4 @@
-* Core Tenants
+* Core Tenets
 
   - Try to be modular. Each XEP should essentially be a plugin, and we
     should make it easy to modify the server to support more XEPS...
