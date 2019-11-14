@@ -21,6 +21,7 @@ import Data.ByteString.Base64 (decodeLenient)
 import Data.Maybe
 import Data.UUID
 import System.Random
+import Control.Monad.Primitive
 
 version :: Text
 version = "1.0"
@@ -37,20 +38,40 @@ xmppTlsPort = 5223
 settings :: ServerSettings
 settings = serverSettings xmppPort "*"
 
+-- TODO wrap AppData / configuration in a reader monad.
+
+-- | Generate a new initial stream header with a new UUID.
+initiateStream :: (PrimMonad m, MonadIO m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
+initiateStream sink = do
+    streamId <- liftIO randomIO
+    streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
+    return streamId
+
+
+-- | Handle the initial TLS stream negotiation from an XMPP client.
+-- TODO, modify this to be able to skip garbage that we don't handle.
 startTLS :: AppData -> IO ()
 startTLS ad = runConduit $ do
   stream <- appSource ad .| parseBytes def .| awaitStream
   liftIO $ putStrLn "New connection"
-  streamId <- liftIO randomIO
-  streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| appSink ad
+
+  -- Send initial stream header in response
+  initiateStream $ appSink ad
+
+  -- Send StartTLS feature.
   featuresTLS  .| XR.renderBytes def .| appSink ad
+
+  -- Wait for TLS request from client.
   liftIO $ putStrLn "Awaiting TLS"
   starttls <- appSource ad .| parseBytes def .| awaitStartTls
+
+  -- Tell client to proceed
   liftIO $ putStrLn "Sending TLS proceed"
   yield "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" .| appSink ad
   liftIO $ putStrLn "Closing unencrypted channel."
 
 -- | Todo, figure out how to allow for stream restarts at any point.
+-- This should be architected more like a state machine.
 handleClient :: AppData -> IO ()
 handleClient ad = runConduit $ do
   stream <- appSource ad .| parseBytes def .| awaitStream
@@ -221,3 +242,4 @@ xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
   stls handleClient
+
