@@ -94,8 +94,8 @@ handleClient ad = runConduit $ do
   openStream (appSource ad) (appSink ad)
   bindFeatures .| XR.renderBytes def .| appSink ad
 
-  appSource ad .| parseBytes def .| awaitForever (lift . print)
-  liftIO $ putStrLn "wah"
+  iq <- appSource ad .| parseBytes def .| receiveIq
+  liftIO $ print iq
 
 -- | Get authentication information.
 plainAuth
@@ -179,13 +179,19 @@ awaitAuth = do
 
 awaitBind :: MonadThrow m => ConduitT Event a m (Maybe Text)
 awaitBind = undefined
---   <iq type="set" id="78d817dd-7058-46bc-a752-45e8079215d8">
--- <bind xmlns="urn:ietf:params:xml:ns:xmpp-bind">
--- <resource>gajim.MGATHP3J</resource>
--- </bind>
--- </iq>
 
--- <auth xmlns="urn:ietf:params:xml:ns:xmpp-sasl" mechanism="PLAIN">AHRlc3QAZm9vYmFy</auth>
+data IqStanza = MkIq { iqId   :: Text
+                     , iqType :: Text
+                     , iqContents :: [Event]  -- Change to a full XML document??
+                     }
+                deriving (Eq, Show)
+
+receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
+receiveIq = do
+  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") iq
+  where iq (i,t) = do
+          c <- (takeAnyTreeContent >> return ()) .| consume
+          return $ MkIq i t c
 
 main :: IO ()
 main =
