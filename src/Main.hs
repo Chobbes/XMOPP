@@ -239,9 +239,6 @@ awaitAuth = do
       [_, user, pass] -> return (user, pass)
       _               -> Nothing
 
-awaitBind :: MonadThrow m => ConduitT Event a m (Maybe Text)
-awaitBind = undefined
-
 --------------------------------------------------
 -- XMPP Stanzas
 --------------------------------------------------
