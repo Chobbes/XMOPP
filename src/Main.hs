@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
 module Main where
 
 import Data.Conduit.Network
@@ -22,34 +22,35 @@ import Data.Maybe
 import Data.UUID
 import System.Random
 import Control.Monad.Primitive
+import Data.Default
+import Control.Monad.Reader.Class
+import Control.Monad.Reader
+import Control.Monad.IO.Unlift
 
 version :: Text
 version = "1.0"
 
-fqdn :: Text
-fqdn = "localhost"
+data XMPPSettings =
+  XMPPSettings { fqdn     :: Text
+               , xmppPort :: Int
+               }
 
-xmppPort :: Int
-xmppPort = 5222
-
-xmppTlsPort :: Int
-xmppTlsPort = 5223
-
-settings :: ServerSettings
-settings = serverSettings xmppPort "*"
+instance Default XMPPSettings where
+  def = XMPPSettings "localhost" 5222 
 
 -- TODO wrap AppData / configuration in a reader monad.
 
 -- | Generate a new initial stream header with a new UUID.
-initiateStream :: (PrimMonad m, MonadIO m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
+initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
 initiateStream sink = do
     streamId <- liftIO randomIO
+    fqdn <- asks fqdn
     streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
     return streamId
 
 -- | Open a stream.
 openStream
-  :: (MonadThrow m, PrimMonad m, MonadIO m) =>
+  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
      ConduitM a BS.ByteString m () ->
      ConduitT BS.ByteString c m r ->
      ConduitT a c m (Maybe Event)
@@ -58,10 +59,9 @@ openStream source sink = do
   initiateStream $ sink
   return stream
 
-
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
-startTLS :: AppData -> IO ()
+startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
 startTLS ad = runConduit $ do
   openStream (appSource ad) (appSink ad)
 
@@ -79,7 +79,7 @@ startTLS ad = runConduit $ do
 
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
-handleClient :: AppData -> IO ()
+handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
 handleClient ad = runConduit $ do
   openStream (appSource ad) (appSink ad)
 
@@ -180,11 +180,16 @@ awaitAuth = do
 awaitBind :: MonadThrow m => ConduitT Event a m (Maybe Text)
 awaitBind = undefined
 
+--------------------------------------------------
+-- XMPP Stanzas
+--------------------------------------------------
+
 data IqStanza = MkIq { iqId   :: Text
                      , iqType :: Text
                      , iqContents :: [Event]  -- Change to a full XML document??
                      }
                 deriving (Eq, Show)
+
 
 receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
 receiveIq = do
@@ -195,9 +200,12 @@ receiveIq = do
 
 main :: IO ()
 main =
-  runTCPServerStartTLS (tlsConfig "*" xmppPort "cert.pem" "key.pem") xmpp
+  let settings = def in
+    runReaderT (do port <- asks xmppPort
+                   runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) settings
 
-xmpp :: (AppData, (AppData -> IO ()) -> IO a) -> IO a
+
+xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) => (AppData, (AppData -> m ()) -> m a) -> m a
 xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
