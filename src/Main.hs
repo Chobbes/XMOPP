@@ -26,6 +26,7 @@ import Data.Default
 import Control.Monad.Reader.Class
 import Control.Monad.Reader
 import Control.Monad.IO.Unlift
+import Control.Monad
 
 version :: Text
 version = "1.0"
@@ -56,7 +57,7 @@ openStream
      ConduitT a c m (Maybe Event)
 openStream source sink = do
   stream <- source .| parseBytes def .| awaitStream
-  initiateStream $ sink
+  initiateStream sink
   return stream
 
 -- | Handle the initial TLS stream negotiation from an XMPP client.
@@ -109,7 +110,7 @@ plainAuth source sink = do
 
 
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
-streamRespHeader from lang streamId = do
+streamRespHeader from lang streamId =
   yield $ EventBeginElement streamName attrs
   where attrs = [ at "from" from
                 , at "version" version
@@ -122,7 +123,7 @@ streamRespHeader from lang streamId = do
                           (Just "stream")
 
 features :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
-features children = XR.tag featureName mempty children
+features = XR.tag featureName mempty
   where
     featureName = Name "features" (Just "http://etherx.jabber.org/streams") (Just "stream")
 
@@ -192,11 +193,16 @@ data IqStanza = MkIq { iqId   :: Text
 
 
 receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
-receiveIq = do
+receiveIq =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") iq
   where iq (i,t) = do
-          c <- (takeAnyTreeContent >> return ()) .| consume
+          c <- void takeAnyTreeContent .| consume
           return $ MkIq i t c
+
+
+--------------------------------------------------
+-- Main server
+--------------------------------------------------
 
 main :: IO ()
 main =
