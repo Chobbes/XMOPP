@@ -1,4 +1,14 @@
 {-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
+{-# LANGUAGE EmptyDataDecls             #-}
+{-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE GADTs                      #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+{-# LANGUAGE OverloadedStrings          #-}
+{-# LANGUAGE QuasiQuotes                #-}
+{-# LANGUAGE TemplateHaskell            #-}
+{-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
 module Main where
 
 import Data.Conduit.Network
@@ -27,19 +37,40 @@ import Control.Monad.Reader.Class
 import Control.Monad.Reader
 import Control.Monad.IO.Unlift
 import Control.Monad
+import Database.Persist
+import Database.Persist.Sqlite
+import Database.Persist.TH
 
+--------------------------------------------------
+-- Global XMPP settings
+--------------------------------------------------
+
+-- | Stream version?
 version :: Text
 version = "1.0"
 
 data XMPPSettings =
   XMPPSettings { fqdn     :: Text
                , xmppPort :: Int
+               , xmppDB   :: Text
                }
 
 instance Default XMPPSettings where
-  def = XMPPSettings "localhost" 5222 
+  def = XMPPSettings "localhost" 5222 "xmpp.db"
 
--- TODO wrap AppData / configuration in a reader monad.
+--------------------------------------------------
+-- Database
+--------------------------------------------------
+
+share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
+User
+    name Text
+    password Text
+    UniqueName name
+    deriving Show
+|]
+
+-- TODO wrap AppData / configuration in a reader monad?
 
 -- | Generate a new initial stream header with a new UUID.
 initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
@@ -80,34 +111,52 @@ startTLS ad = runConduit $ do
 
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
-handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
+handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
 handleClient ad = runConduit $ do
   openStream (appSource ad) (appSink ad)
 
   -- Get user and pass
   auth <- plainAuth (appSource ad) (appSink ad)
-  liftIO $ print auth
+  case auth of
+    Nothing -> return () -- TODO: send error
+    Just _  -> do
+      yield "<success xmlns='urn:ietf:params:xml:ns:xmpp-sasl'></success>" .| appSink ad
+      liftIO $ print auth
 
-  -- TODO. Fix this. Just accepts any user/pass, lol.
-  yield "<success xmlns='urn:ietf:params:xml:ns:xmpp-sasl'></success>" .| appSink ad
+      -- Restart stream and present bind feature.
+      openStream (appSource ad) (appSink ad)
+      bindFeatures .| XR.renderBytes def .| appSink ad
 
-  -- Restart stream and present bind feature.
-  openStream (appSource ad) (appSink ad)
-  bindFeatures .| XR.renderBytes def .| appSink ad
-
-  iq <- appSource ad .| parseBytes def .| receiveIq
-  liftIO $ print iq
+      iq <- appSource ad .| parseBytes def .| receiveIq
+      liftIO $ print iq
 
 -- | Get authentication information.
 plainAuth
-  :: (PrimMonad m, MonadThrow m) =>
+  :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
      ConduitM a1 BS.ByteString m ()
      -> ConduitM BS.ByteString c m a2
-     -> ConduitT a1 c m (Maybe (Text, Text))
+     -> ConduitT a1 c m (Maybe User)
 plainAuth source sink = do
   authFeatures .| XR.renderBytes def .| sink
-  source .| parseBytes def .| awaitAuth
+  auth <- source .| parseBytes def .| awaitAuth
+  case auth of
+    Just (user, pass) -> authenticate user pass
+    _ -> return Nothing
 
+authenticate
+  :: (MonadReader XMPPSettings m, MonadIO m) =>
+     Text -> Text -> m (Maybe User)
+authenticate user pass = do
+  db <- asks xmppDB
+  liftIO $ runSqlite db $ do
+    maybeUser <- getBy (UniqueName user)
+    return $
+      case maybeUser of
+        Just (Entity _ u) ->
+          if userPassword u == pass
+          then Just u
+          else Nothing
+        _ -> Nothing
 
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
@@ -205,10 +254,10 @@ receiveIq =
 --------------------------------------------------
 
 main :: IO ()
-main =
-  let settings = def in
-    runReaderT (do port <- asks xmppPort
-                   runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) settings
+main = do
+  runSqlite "test.db" $ runMigration migrateAll
+  runReaderT (do port <- asks xmppPort
+                 runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
 
 
 xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) => (AppData, (AppData -> m ()) -> m a) -> m a
@@ -216,4 +265,3 @@ xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
   stls handleClient
-

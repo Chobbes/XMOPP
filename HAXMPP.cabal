@@ -35,7 +35,10 @@ library
                        unliftio-core >= 0.1.2.0,
                        uuid >= 1.3.13 && <1.4,
                        xml-conduit >=1.9.0.0 && <1.10,
-                       xml-types >= 0.3.6
+                       xml-types >= 0.3.6,
+                       persistent >= 2.10.0,
+                       persistent-template >= 2.7.1,
+                       persistent-sqlite >= 2.10.5
   hs-source-dirs:      src
   default-language:    Haskell2010
 
@@ -59,6 +62,9 @@ executable HAXMPP
                        unliftio-core >= 0.1.2.0,
                        uuid >= 1.3.13 && <1.4,
                        xml-conduit >=1.9.0.0 && <1.10,
-                       xml-types >= 0.3.6
+                       xml-types >= 0.3.6,
+                       persistent >= 2.10.0,
+                       persistent-template >= 2.7.1,
+                       persistent-sqlite >= 2.10.5
   hs-source-dirs:      src
   default-language:    Haskell2010
