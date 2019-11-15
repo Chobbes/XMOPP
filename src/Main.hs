@@ -86,11 +86,10 @@ openStream
   :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
      ConduitM a BS.ByteString m () ->
      ConduitT BS.ByteString c m r ->
-     ConduitT a c m (Maybe Event)
+     ConduitT a c m UUID
 openStream source sink = do
-  stream <- source .| parseBytes def .| awaitStream
+  source .| parseBytes def .| awaitStream
   initiateStream sink
-  return stream
 
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
@@ -114,7 +113,7 @@ startTLS ad = runConduit $ do
 -- This should be architected more like a state machine.
 handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
 handleClient ad = runConduit $ do
-  openStream (appSource ad) (appSink ad)
+  streamid <- openStream (appSource ad) (appSink ad)
 
   -- Get user and pass
   auth <- plainAuth (appSource ad) (appSink ad)
@@ -130,6 +129,18 @@ handleClient ad = runConduit $ do
 
       iq <- appSource ad .| parseBytes def .| receiveIq
       liftIO $ print iq
+
+      yield (encodeUtf8 . hack . iqId $ fromJust iq) .| appSink ad
+
+-- TODO replace this
+hack :: Text -> Text
+hack id =
+  mconcat [ "<iq xmlns=\"jabber:client\" id=\"", id, "\" type=\"result\">"
+          , " <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\">"
+          , " <jid>test@localhost/gajim.CD9NEZ09</jid>"
+          , " </bind>"
+          , " </iq>"
+          ]
 
 -- | Get authentication information.
 plainAuth
@@ -248,7 +259,6 @@ receiveIq =
   where iq (i,t) = do
           c <- void takeAnyTreeContent .| consume
           return $ MkIq i t c
-
 
 --------------------------------------------------
 -- Main server
