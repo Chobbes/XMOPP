@@ -62,6 +62,7 @@ instance Default XMPPSettings where
 -- Database
 --------------------------------------------------
 
+-- TODO make sure passwords aren't plain text in the future.
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 User
     name Text
