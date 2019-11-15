@@ -9,6 +9,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
+{-# OPTIONS_GHC -fdefer-type-errors  #-}
 module Main where
 
 import Data.Conduit.Network
@@ -27,6 +28,7 @@ import qualified Text.XML.Stream.Render as XR
 import Data.Conduit.List as CL
 import Data.Char
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Char8 as BSC
 import Data.ByteString.Base64 (decodeLenient)
 import Data.Maybe
 import Data.UUID
@@ -40,6 +42,8 @@ import Control.Monad
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
+import Test.HUnit
+import Control.Monad.ST
 
 --------------------------------------------------
 -- Global XMPP settings
@@ -263,7 +267,7 @@ receiveIq =
 
 main :: IO ()
 main = do
-  runSqlite "test.db" $ runMigration migrateAll
+  runSqlite (xmppDB def) $ runMigration migrateAll
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
 
@@ -273,3 +277,6 @@ xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
   stls handleClient
+
+test_required :: Test
+test_required = runST (runConduit $ required .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<required/>"])
