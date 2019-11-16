@@ -9,7 +9,6 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
-{-# OPTIONS_GHC -fdefer-type-errors  #-}
 module Main where
 
 import Data.Conduit.Network
