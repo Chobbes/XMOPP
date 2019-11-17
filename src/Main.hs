@@ -114,20 +114,16 @@ handleClient ad = runConduit $ do
       openStream (appSource ad) (appSink ad)
       bindFeatures .| XR.renderBytes def .| appSink ad
 
-      iq <- appSource ad .| parseBytes def .| receiveIq
-      liftIO $ print iq
+      iqStanza <- appSource ad .| parseBytes def .| receiveIq
+      liftIO $ print iqStanza
 
-      yield (encodeUtf8 . hack . iqId $ fromJust iq) .| appSink ad
-
--- TODO replace this
-hack :: Text -> Text
-hack id =
-  mconcat [ "<iq xmlns=\"jabber:client\" id=\"", id, "\" type=\"result\">"
-          , " <bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\">"
-          , " <jid>test@localhost/gajim.CD9NEZ09</jid>"
-          , " </bind>"
-          , " </iq>"
-          ]
+      case iqStanza of
+        Nothing -> return () -- TODO
+        Just iqStanza -> do
+          iq (iqId iqStanza) "result" (bind "test@localhost/gajim.CD9NEZ09") .|
+            XR.renderBytes def .|
+            appSink ad
+--      yield (encodeUtf8 . hack . iqId $ fromJust iq) .| appSink ad
 
 --------------------------------------------------
 -- TLS
@@ -234,8 +230,30 @@ awaitAuth = do
       _               -> Nothing
 
 --------------------------------------------------
+-- Bind
+--------------------------------------------------
+
+bindNamespace :: Text
+bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
+
+bindFeatures :: Monad m => ConduitT i Event m ()
+bindFeatures = features bind
+  where
+    bind = XR.tag bindName mempty (return ())--required
+    bindName = Name "bind" (Just bindNamespace) Nothing
+
+bind :: Monad m => Text -> ConduitT i Event m ()
+bind jid = XR.tag bindName mempty (XR.tag "jid" mempty (XR.content jid))
+  where
+    bindName = Name "bind" (Just bindNamespace) Nothing
+
+--------------------------------------------------
 -- OTHER STUFF
 --------------------------------------------------
+
+-- TODO use IqStanza below?
+iq :: Monad m => Text -> Text -> ConduitT i Event m () -> ConduitT i Event m ()
+iq i t = XR.tag "iq" ((XR.attr "id" i) <> (XR.attr "type" t))
 
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
@@ -260,12 +278,6 @@ features = XR.tag featureName mempty
 
 required :: Monad m => ConduitT i Event m ()
 required = XR.tag "required" mempty (return ())
-
-bindFeatures :: Monad m => ConduitT i Event m ()
-bindFeatures = features bind
-  where
-    bind = XR.tag bindName mempty required
-    bindName = Name "bind" (Just "urn:ietf:params:xml:ns:xmpp-bind") Nothing
 
 awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
@@ -339,3 +351,9 @@ test_tlsFeatures = runST (runConduit $ tlsFeatures .| XR.renderBytes def .| cons
 
 test_authFeatures :: Test
 test_authFeatures = runST (runConduit $ authFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"])
+
+test_bindFeatures :: Test
+test_bindFeatures = runST (runConduit $ bindFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>"])
+
+test_bind :: Test
+test_bind = runST (runConduit $ (bind "test") .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"])
