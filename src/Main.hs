@@ -94,24 +94,6 @@ openStream source sink = do
   source .| parseBytes def .| awaitStream
   initiateStream sink
 
--- | Handle the initial TLS stream negotiation from an XMPP client.
--- TODO, modify this to be able to skip garbage that we don't handle.
-startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
-startTLS ad = runConduit $ do
-  openStream (appSource ad) (appSink ad)
-
-  -- Send StartTLS feature.
-  featuresTLS  .| XR.renderBytes def .| appSink ad
-
-  -- Wait for TLS request from client.
-  liftIO $ putStrLn "Awaiting TLS"
-  starttls <- appSource ad .| parseBytes def .| awaitStartTls
-
-  -- Tell client to proceed
-  liftIO $ putStrLn "Sending TLS proceed"
-  yield "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" .| appSink ad
-  liftIO $ putStrLn "Closing unencrypted channel."
-
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
 handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
@@ -145,6 +127,51 @@ hack id =
           , " </iq>"
           ]
 
+--------------------------------------------------
+-- TLS
+--------------------------------------------------
+
+tlsNamespace :: Text
+tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
+
+-- | Handle the initial TLS stream negotiation from an XMPP client.
+-- TODO, modify this to be able to skip garbage that we don't handle.
+startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
+startTLS ad = runConduit $ do
+  openStream (appSource ad) (appSink ad)
+
+  -- Send StartTLS feature.
+  tlsFeatures .| XR.renderBytes def .| appSink ad
+
+  -- Wait for TLS request from client.
+  liftIO $ putStrLn "Awaiting TLS"
+  starttls <- appSource ad .| parseBytes def .| awaitStartTls
+
+  -- Tell client to proceed
+  liftIO $ putStrLn "Sending TLS proceed"
+  yield "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" .| appSink ad
+  liftIO $ putStrLn "Closing unencrypted channel."
+
+proceed :: Monad m => ConduitT i Event m ()
+proceed = XR.tag (Name "proceed" (Just tlsNamespace) Nothing) mempty (return ())
+
+tlsFeatures :: Monad m => ConduitT i Event m ()
+tlsFeatures = features tlsFeature
+  where
+    tlsFeature = XR.tag tlsName mempty required
+    tlsName    = Name "starttls" (Just tlsNamespace)
+                                 (Just "stream") -- if I remove the prefix here then required gets an empty namespace?????
+
+awaitStartTls :: MonadThrow m => ConduitT Event a m (Maybe Event)
+awaitStartTls = awaitName (Name {nameLocalName = "starttls", nameNamespace = Just tlsNamespace, namePrefix = Nothing})
+
+--------------------------------------------------
+-- SASL
+--------------------------------------------------
+
+saslNamespace :: Text
+saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
+
 -- | Get authentication information.
 plainAuth
   :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
@@ -173,9 +200,32 @@ authenticate user pass = do
           else Nothing
         _ -> Nothing
 
+authFeatures :: Monad m => ConduitT i Event m ()
+authFeatures = features mechanisms
+  where
+    mechanisms = XR.tag mechanismsName mempty plain
+    mechanismsName = Name "mechanisms"
+                          (Just saslNamespace)
+                          Nothing
+    plain = XR.tag (Name "mechanism" Nothing Nothing) mempty (XR.content "PLAIN")
+
+awaitAuth :: MonadThrow m => ConduitT Event a m (Maybe (Text, Text))
+awaitAuth = do
+  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content
+  return $ do
+    auth <- authStr
+    case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
+      [_, user, pass] -> return (user, pass)
+      _               -> Nothing
+
+--------------------------------------------------
+-- OTHER STUFF
+--------------------------------------------------
+
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
   yield $ EventBeginElement streamName attrs
+  -- How come the client isn't sending us "from"? We need it to send "to"
   where attrs = [ at "from" from
                 , at "version" version
                 , at "id" (toText streamId)
@@ -189,14 +239,9 @@ streamRespHeader from lang streamId =
 features :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
 features = XR.tag featureName mempty
   where
-    featureName = Name "features" (Just "http://etherx.jabber.org/streams") (Just "stream")
-
-featuresTLS :: Monad m => ConduitT i Event m ()
-featuresTLS = features tlsFeature
-  where
-    tlsFeature = XR.tag tlsName (XR.attr "xmlns" "jabber:client") required
-    tlsName    = Name "starttls" (Just "urn:ietf:params:xml:ns:xmpp-tls")
-                                 (Just "stream")
+    featureName = Name "features"
+                       (Just "http://etherx.jabber.org/streams")
+                       (Just "stream")
 
 required :: Monad m => ConduitT i Event m ()
 required = XR.tag "required" mempty (return ())
@@ -207,40 +252,19 @@ bindFeatures = features bind
     bind = XR.tag bindName mempty required
     bindName = Name "bind" (Just "urn:ietf:params:xml:ns:xmpp-bind") Nothing
 
-authFeatures :: Monad m => ConduitT i Event m ()
-authFeatures = features mechanisms
-  where
-    mechanisms = XR.tag mechanismsName mempty plain
-    mechanismsName = Name "mechanisms"
-                          (Just "urn:ietf:params:xml:ns:xmpp-sasl")
-                          Nothing
-    plain = XR.tag "mechanism" mempty (XR.content "PLAIN")
-
 awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
-
-awaitStartTls :: MonadThrow m => ConduitT Event a m (Maybe Event)
-awaitStartTls = awaitName (Name {nameLocalName = "starttls", nameNamespace = Just "urn:ietf:params:xml:ns:xmpp-tls", namePrefix = Nothing})
 
 awaitName :: MonadThrow m => Name -> ConduitT Event a m (Maybe Event)
 awaitName name = do
   element <- await
   case element of
-    Just (EventBeginElement n ats) ->
+    Just (EventBeginElement n _) ->
       if n == name
         then return element
         else awaitName name
     Nothing -> return Nothing
     _ -> awaitName name
-
-awaitAuth :: MonadThrow m => ConduitT Event a m (Maybe (Text, Text))
-awaitAuth = do
-  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just "urn:ietf:params:xml:ns:xmpp-sasl", namePrefix = Nothing}))) content
-  return $ do
-    auth <- authStr
-    case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
-      [_, user, pass] -> return (user, pass)
-      _               -> Nothing
 
 --------------------------------------------------
 -- XMPP Stanzas
@@ -277,5 +301,11 @@ xmpp (appData, stls) = do
   liftIO $ putStrLn "Starting TLS..."
   stls handleClient
 
+-- TODO: move tests to separate file
+
 test_required :: Test
 test_required = runST (runConduit $ required .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<required/>"])
+
+
+test_tlsFeatures :: Test
+test_tlsFeatures = runST (runConduit $ tlsFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"])
