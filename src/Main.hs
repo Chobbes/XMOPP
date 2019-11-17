@@ -103,9 +103,11 @@ handleClient ad = runConduit $ do
   -- Get user and pass
   auth <- plainAuth (appSource ad) (appSink ad)
   case auth of
-    Nothing -> return () -- TODO: send error
+    Nothing -> do
+      notAuthorized .| XR.renderBytes def .| appSink ad
+      liftIO $ putStrLn "Authentication failed."
     Just _  -> do
-      yield "<success xmlns='urn:ietf:params:xml:ns:xmpp-sasl'></success>" .| appSink ad
+      success .| XR.renderBytes def .| appSink ad
       liftIO $ print auth
 
       -- Restart stream and present bind feature.
@@ -149,7 +151,7 @@ startTLS ad = runConduit $ do
 
   -- Tell client to proceed
   liftIO $ putStrLn "Sending TLS proceed"
-  yield "<proceed xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" .| appSink ad
+  proceed .| XR.renderBytes def .| appSink ad
   liftIO $ putStrLn "Closing unencrypted channel."
 
 proceed :: Monad m => ConduitT i Event m ()
@@ -160,7 +162,7 @@ tlsFeatures = features tlsFeature
   where
     tlsFeature = XR.tag tlsName mempty required
     tlsName    = Name "starttls" (Just tlsNamespace)
-                                 (Just "stream") -- if I remove the prefix here then required gets an empty namespace?????
+                                 Nothing--(Just "stream") -- if I remove the prefix here then required gets an empty namespace?????
 
 awaitStartTls :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStartTls = awaitName (Name {nameLocalName = "starttls", nameNamespace = Just tlsNamespace, namePrefix = Nothing})
@@ -200,6 +202,19 @@ authenticate user pass = do
           else Nothing
         _ -> Nothing
 
+failure :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
+failure = XR.tag (Name "failure" (Just saslNamespace) Nothing) mempty
+
+-- TODO on receiving abort we need to reply with this
+aborted :: Monad m => ConduitT i Event m ()
+aborted = failure $ XR.tag "aborted" mempty (return ())
+
+notAuthorized :: Monad m => ConduitT i Event m ()
+notAuthorized = failure $ XR.tag "not-authorized" mempty (return ())
+
+success :: Monad m => ConduitT i Event m ()
+success = XR.tag (Name "success" (Just saslNamespace) Nothing) mempty (return ())
+
 authFeatures :: Monad m => ConduitT i Event m ()
 authFeatures = features mechanisms
   where
@@ -211,7 +226,7 @@ authFeatures = features mechanisms
 
 awaitAuth :: MonadThrow m => ConduitT Event a m (Maybe (Text, Text))
 awaitAuth = do
-  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content
+  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content -- TODO check for mechanism='PLAIN'
   return $ do
     auth <- authStr
     case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
@@ -306,6 +321,21 @@ xmpp (appData, stls) = do
 test_required :: Test
 test_required = runST (runConduit $ required .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<required/>"])
 
+test_proceed :: Test
+test_proceed = runST (runConduit $ proceed .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"])
+
+test_success :: Test
+test_success = runST (runConduit $ success .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"])
+
+-- The following tests don't pass.
+-- Some weirdness with XR.tag, prefixes, and namespaces.
+-- Doesn't match the spec, but seems to be ok for the client.
+
+test_aborted :: Test
+test_aborted = runST (runConduit $ aborted .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"])
 
 test_tlsFeatures :: Test
 test_tlsFeatures = runST (runConduit $ tlsFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"])
+
+test_authFeatures :: Test
+test_authFeatures = runST (runConduit $ authFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"])
