@@ -45,7 +45,7 @@ library
 
 executable HAXMPP
   main-is:             Main.hs
-  -- other-modules:
+  other-modules:       Tests
   -- other-extensions:
   build-depends:       HUnit >= 1.6.0.0,
                        base >=4.12 && <4.13,

@@ -27,7 +27,6 @@ import qualified Text.XML.Stream.Render as XR
 import Data.Conduit.List as CL
 import Data.Char
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as BSC
 import Data.ByteString.Base64 (decodeLenient)
 import Data.Maybe
 import Data.UUID
@@ -41,8 +40,6 @@ import Control.Monad
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
-import Test.HUnit
-import Control.Monad.ST
 
 --------------------------------------------------
 -- Global XMPP settings
@@ -304,11 +301,17 @@ data IqStanza = MkIq { iqId   :: Text
                 deriving (Eq, Show)
 
 
--- receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
+receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT Event o m (Maybe c)
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-bindHandler jid sink i t =
+bindHandler :: (MonadThrow m, PrimMonad m) =>
+  Text ->
+  ConduitT BS.ByteString o m b ->
+  Text ->
+  Text ->
+  ConduitT Event o m (Maybe b)
+bindHandler jid sink i _ =
   tagIgnoreAttrs (matching (==bindName)) doBind
   where
     resourceName = Name "resource" (Just bindNamespace) Nothing
@@ -335,44 +338,9 @@ main = do
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
 
 
-xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) => (AppData, (AppData -> m ()) -> m a) -> m a
+xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
+  GeneralApplicationStartTLS m () -- (AppData, (AppData -> m ()) -> m ()) -> m ()
 xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
   stls handleClient
-
--- TODO: move tests to separate file
-
-test_required :: Test
-test_required = runST (runConduit $ required .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<required/>"])
-
-test_proceed :: Test
-test_proceed = runST (runConduit $ proceed .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"])
-
-test_success :: Test
-test_success = runST (runConduit $ success .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"])
-
--- The following tests don't pass.
--- Some weirdness with XR.tag, prefixes, and namespaces.
--- Doesn't match the spec, but seems to be ok for the client.
-
-test_aborted :: Test
-test_aborted = runST (runConduit $ aborted .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"])
-
-test_tlsFeatures :: Test
-test_tlsFeatures = runST (runConduit $ tlsFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"])
-
-test_authFeatures :: Test
-test_authFeatures = runST (runConduit $ authFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"])
-
-test_bindFeatures :: Test
-test_bindFeatures = runST (runConduit $ bindFeatures .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>"])
-
-test_bind :: Test
-test_bind = runST (runConduit $ (bind "test") .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"])
-
-test_login_success :: Test
-test_login_success = undefined
-
-test_login_fail :: Test
-test_login_fail = undefined
