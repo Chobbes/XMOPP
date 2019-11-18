@@ -357,3 +357,9 @@ test_bindFeatures = runST (runConduit $ bindFeatures .| XR.renderBytes def .| co
 
 test_bind :: Test
 test_bind = runST (runConduit $ (bind "test") .| XR.renderBytes def .| consume) ~?= ([BSC.pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"])
+
+test_login_success :: Test
+test_login_success = undefined
+
+test_login_fail :: Test
+test_login_fail = undefined
