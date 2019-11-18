@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings, FlexibleContexts #-}
 {-# LANGUAGE EmptyDataDecls             #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GADTs                      #-}
@@ -71,58 +70,6 @@ User
     deriving Show
 |]
 
-userJid :: Text -> User -> Text
-userJid fqdn u = userName u <> "@" <> fqdn
-
--- TODO wrap AppData / configuration in a reader monad?
-
--- | Generate a new initial stream header with a new UUID.
-initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
-initiateStream sink = do
-    streamId <- liftIO randomIO
-    fqdn <- asks fqdn
-    streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
-    return streamId
-
--- | Open a stream.
-openStream
-  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
-     ConduitM a BS.ByteString m () ->
-     ConduitT BS.ByteString c m r ->
-     ConduitT a c m UUID
-openStream source sink = do
-  source .| parseBytes def .| awaitStream
-  initiateStream sink
-
--- | Todo, figure out how to allow for stream restarts at any point.
--- This should be architected more like a state machine.
-handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
-handleClient ad = runConduit $ do
-  streamid <- openStream (appSource ad) (appSink ad)
-
-  -- Get user and pass
-  auth <- plainAuth (appSource ad) (appSink ad)
-  case auth of
-    Nothing -> do
-      notAuthorized .| XR.renderBytes def .| appSink ad
-      liftIO $ putStrLn "Authentication failed."
-    Just u  -> do
-      success .| XR.renderBytes def .| appSink ad
-      liftIO $ print auth
-
-      -- Restart stream and present bind feature.
-      openStream (appSource ad) (appSink ad)
-      bindFeatures .| XR.renderBytes def .| appSink ad
-
-      fqdn <- asks fqdn
-      let jid = userJid fqdn u
-
-      iqStanza <- appSource ad .| parseBytes def .| receiveIq (bindHandler jid (appSink ad))
-      liftIO $ print iqStanza
-
-      appSource ad .| awaitForever (liftIO . print)
-      liftIO $ print "</stream> ;D"
-
 --------------------------------------------------
 -- TLS
 --------------------------------------------------
@@ -133,19 +80,22 @@ tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
 startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
-startTLS ad = runConduit $ do
-  openStream (appSource ad) (appSink ad)
+startTLS ad = startTLS' (appSource ad) (appSink ad)
+
+startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => ConduitM () BS.ByteString m () -> ConduitT BS.ByteString Void m () -> m ()
+startTLS' source sink = runConduit $ do
+  openStream source sink
 
   -- Send StartTLS feature.
-  tlsFeatures .| XR.renderBytes def .| appSink ad
+  tlsFeatures .| XR.renderBytes def .| sink
 
   -- Wait for TLS request from client.
   liftIO $ putStrLn "Awaiting TLS"
-  starttls <- appSource ad .| parseBytes def .| awaitStartTls
+  starttls <- source .| parseBytes def .| awaitStartTls
 
   -- Tell client to proceed
   liftIO $ putStrLn "Sending TLS proceed"
-  proceed .| XR.renderBytes def .| appSink ad
+  proceed .| XR.renderBytes def .| sink
   liftIO $ putStrLn "Closing unencrypted channel."
 
 proceed :: Monad m => ConduitT i Event m ()
@@ -324,6 +274,62 @@ bindHandler jid sink i _ =
 baseIqHandler i t = do
   c <- void takeAnyTreeContent .| consume
   return $ MkIq i t c
+
+userJid :: Text -> User -> Text
+userJid fqdn u = userName u <> "@" <> fqdn
+
+-- TODO wrap AppData / configuration in a reader monad?
+
+-- | Generate a new initial stream header with a new UUID.
+initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
+initiateStream sink = do
+    streamId <- liftIO randomIO
+    fqdn <- asks fqdn
+    streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
+    return streamId
+
+-- | Open a stream.
+openStream
+  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
+     ConduitM a BS.ByteString m () ->
+     ConduitT BS.ByteString c m r ->
+     ConduitT a c m UUID
+openStream source sink = do
+  source .| parseBytes def .| awaitStream
+  initiateStream sink
+
+-- | Todo, figure out how to allow for stream restarts at any point.
+-- This should be architected more like a state machine.
+handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
+handleClient ad = handleClient' (appSource ad) (appSink ad)
+
+-- Separated for testing
+handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => ConduitM () BS.ByteString m () -> ConduitT BS.ByteString Void m () -> m ()
+handleClient' source sink = runConduit $ do
+  streamid <- openStream source sink
+
+  -- Get user and pass
+  auth <- plainAuth source sink
+  case auth of
+    Nothing -> do
+      notAuthorized .| XR.renderBytes def .| sink
+      liftIO $ putStrLn "Authentication failed."
+    Just u  -> do
+      success .| XR.renderBytes def .| sink
+      liftIO $ print auth
+
+      -- Restart stream and present bind feature.
+      openStream source sink
+      bindFeatures .| XR.renderBytes def .| sink
+
+      fqdn <- asks fqdn
+      let jid = userJid fqdn u
+
+      iqStanza <- source .| parseBytes def .| receiveIq (bindHandler jid sink)
+      liftIO $ print iqStanza
+
+      source .| awaitForever (liftIO . print)
+      liftIO $ print "</stream> ;D"
 
 --------------------------------------------------
 -- Main server
