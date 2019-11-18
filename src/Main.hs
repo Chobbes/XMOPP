@@ -74,6 +74,9 @@ User
     deriving Show
 |]
 
+userJid :: Text -> User -> Text
+userJid fqdn u = userName u <> "@" <> fqdn
+
 -- TODO wrap AppData / configuration in a reader monad?
 
 -- | Generate a new initial stream header with a new UUID.
@@ -106,7 +109,7 @@ handleClient ad = runConduit $ do
     Nothing -> do
       notAuthorized .| XR.renderBytes def .| appSink ad
       liftIO $ putStrLn "Authentication failed."
-    Just _  -> do
+    Just u  -> do
       success .| XR.renderBytes def .| appSink ad
       liftIO $ print auth
 
@@ -114,16 +117,14 @@ handleClient ad = runConduit $ do
       openStream (appSource ad) (appSink ad)
       bindFeatures .| XR.renderBytes def .| appSink ad
 
-      iqStanza <- appSource ad .| parseBytes def .| receiveIq
+      fqdn <- asks fqdn
+      let jid = userJid fqdn u
+
+      iqStanza <- appSource ad .| parseBytes def .| receiveIq (bindHandler jid (appSink ad))
       liftIO $ print iqStanza
 
-      case iqStanza of
-        Nothing -> return () -- TODO
-        Just iqStanza -> do
-          iq (iqId iqStanza) "result" (bind "test@localhost/gajim.CD9NEZ09") .|
-            XR.renderBytes def .|
-            appSink ad
---      yield (encodeUtf8 . hack . iqId $ fromJust iq) .| appSink ad
+      appSource ad .| awaitForever (liftIO . print)
+      liftIO $ print "</stream> ;D"
 
 --------------------------------------------------
 -- TLS
@@ -236,16 +237,15 @@ awaitAuth = do
 bindNamespace :: Text
 bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
 
+bindName = Name "bind" (Just bindNamespace) Nothing
+
 bindFeatures :: Monad m => ConduitT i Event m ()
 bindFeatures = features bind
   where
     bind = XR.tag bindName mempty (return ())--required
-    bindName = Name "bind" (Just bindNamespace) Nothing
 
 bind :: Monad m => Text -> ConduitT i Event m ()
 bind jid = XR.tag bindName mempty (XR.tag "jid" mempty (XR.content jid))
-  where
-    bindName = Name "bind" (Just bindNamespace) Nothing
 
 --------------------------------------------------
 -- OTHER STUFF
@@ -304,12 +304,23 @@ data IqStanza = MkIq { iqId   :: Text
                 deriving (Eq, Show)
 
 
-receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
-receiveIq =
-  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") iq
-  where iq (i,t) = do
-          c <- void takeAnyTreeContent .| consume
-          return $ MkIq i t c
+-- receiveIq :: MonadThrow m => ConduitT Event a m (Maybe IqStanza)
+receiveIq handler =
+  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
+
+bindHandler jid sink i t =
+  tagIgnoreAttrs (matching (==bindName)) doBind
+  where
+    resourceName = Name "resource" (Just bindNamespace) Nothing
+    doBind = do
+      resource <- tagIgnoreAttrs (matching (==resourceName)) content
+
+      -- TODO remove fromJust
+      iq i "result" (bind $ jid <> "/" <> fromJust resource) .| XR.renderBytes def .| sink
+
+baseIqHandler i t = do
+  c <- void takeAnyTreeContent .| consume
+  return $ MkIq i t c
 
 --------------------------------------------------
 -- Main server
@@ -317,7 +328,9 @@ receiveIq =
 
 main :: IO ()
 main = do
+  putStrLn "Running SQL migrations..."
   runSqlite (xmppDB def) $ runMigration migrateAll
+  putStrLn "Starting server..."
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
 
