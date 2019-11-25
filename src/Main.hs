@@ -8,6 +8,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
 {-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
+-- {-# OPTIONS_GHC -fdefer-type-errors  #-}
 module Main where
 
 import Data.Conduit.Network
@@ -19,13 +20,14 @@ import Control.Monad.Catch
 import Data.Text (Text, unpack)
 import Data.Text.Encoding
 import qualified Data.Text as T
-import Data.XML.Types
+import Data.XML.Types (Event(..), Content(..))
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Text.XML.Stream.Render as XR
 import Data.Conduit.List as CL
 import Data.Char
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.ByteString.Base64 (decodeLenient)
 import Data.Maybe
 import Data.UUID
@@ -39,6 +41,12 @@ import Control.Monad
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
+import Data.Conduit.TMChan
+import GHC.Conc (atomically, forkIO, STM)
+import Conduit
+import Control.Concurrent.STM.Map as STC
+import Control.Concurrent.STM.TMChan
+import qualified Data.Map as M
 
 --------------------------------------------------
 -- Global XMPP settings
@@ -77,36 +85,53 @@ User
 tlsNamespace :: Text
 tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
 
+{-
+  Need to lock sink until full messages are sent...
+
+  There's a couple problems.
+
+  If I have a stream I don't necessarily know when I have a full piece
+  of XML currently. Not sure when response is finished.
+
+  - Must always send full thing.
+
+  Locked right now :|
+-}
+
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
 startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
-startTLS ad = startTLS' (appSource ad) (appSink ad)
+startTLS ad = do
+  (sink, chan) <- liftIO $ forkSink (appSink ad)
+  startTLS' (appSource ad .| parseBytes def) sink (appSink ad)
 
-startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => ConduitM () BS.ByteString m () -> ConduitT BS.ByteString Void m () -> m ()
-startTLS' source sink = runConduit $ do
-  openStream source sink
+startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => ConduitM () Event m () -> ConduitM Element Void m () -> ConduitT BS.ByteString Void m () -> m ()
+startTLS' source sink bytesink = runConduit $ do
+  -- Use of bytesink is potentially dangerous, but should only be
+  -- used before concurrency is an issue
+  openStream source bytesink
 
   -- Send StartTLS feature.
-  tlsFeatures .| XR.renderBytes def .| sink
+  yield tlsFeatures .| sink
 
   -- Wait for TLS request from client.
   liftIO $ putStrLn "Awaiting TLS"
-  starttls <- source .| parseBytes def .| awaitStartTls
+  starttls <- source .| awaitStartTls
 
   -- Tell client to proceed
   liftIO $ putStrLn "Sending TLS proceed"
-  proceed .| XR.renderBytes def .| sink
+  yield proceed .| sink
   liftIO $ putStrLn "Closing unencrypted channel."
 
-proceed :: Monad m => ConduitT i Event m ()
-proceed = XR.tag (Name "proceed" (Just tlsNamespace) Nothing) mempty (return ())
+proceed :: Element
+proceed = Element (Name "proceed" (Just tlsNamespace) Nothing) mempty []
 
-tlsFeatures :: Monad m => ConduitT i Event m ()
-tlsFeatures = features tlsFeature
+tlsFeatures :: Element
+tlsFeatures = features [NodeElement tlsFeature]
   where
-    tlsFeature = XR.tag tlsName mempty required
+    tlsFeature = Element tlsName mempty [NodeElement required]
     tlsName    = Name "starttls" (Just tlsNamespace)
-                                 Nothing--(Just "stream") -- if I remove the prefix here then required gets an empty namespace?????
+                                 Nothing
 
 awaitStartTls :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStartTls = awaitName (Name {nameLocalName = "starttls", nameNamespace = Just tlsNamespace, namePrefix = Nothing})
@@ -121,12 +146,12 @@ saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
 -- | Get authentication information.
 plainAuth
   :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
-     ConduitM a1 BS.ByteString m ()
-     -> ConduitM BS.ByteString c m a2
+     ConduitM a1 Event m ()
+     -> ConduitM Element c m a2
      -> ConduitT a1 c m (Maybe User)
 plainAuth source sink = do
-  authFeatures .| XR.renderBytes def .| sink
-  auth <- source .| parseBytes def .| awaitAuth
+  yield authFeatures .| sink
+  auth <- source .| awaitAuth
   case auth of
     Just (user, pass) -> authenticate user pass
     _ -> return Nothing
@@ -159,14 +184,14 @@ notAuthorized = failure $ XR.tag "not-authorized" mempty (return ())
 success :: Monad m => ConduitT i Event m ()
 success = XR.tag (Name "success" (Just saslNamespace) Nothing) mempty (return ())
 
-authFeatures :: Monad m => ConduitT i Event m ()
-authFeatures = features mechanisms
+authFeatures :: Element
+authFeatures = features [NodeElement mechanisms]
   where
-    mechanisms = XR.tag mechanismsName mempty plain
+    mechanisms = Element mechanismsName mempty [NodeElement plain]
     mechanismsName = Name "mechanisms"
                           (Just saslNamespace)
                           Nothing
-    plain = XR.tag (Name "mechanism" Nothing Nothing) mempty (XR.content "PLAIN")
+    plain = Element (Name "mechanism" Nothing Nothing) mempty [NodeContent "PLAIN"]
 
 awaitAuth :: MonadThrow m => ConduitT Event a m (Maybe (Text, Text))
 awaitAuth = do
@@ -184,15 +209,18 @@ awaitAuth = do
 bindNamespace :: Text
 bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
 
+bindName :: Name
 bindName = Name "bind" (Just bindNamespace) Nothing
 
-bindFeatures :: Monad m => ConduitT i Event m ()
-bindFeatures = features bind
+bindFeatures :: Element
+bindFeatures = features [NodeElement bind]
   where
-    bind = XR.tag bindName mempty (return ())--required
+    bind = Element bindName mempty []
 
-bind :: Monad m => Text -> ConduitT i Event m ()
-bind jid = XR.tag bindName mempty (XR.tag "jid" mempty (XR.content jid))
+bind :: Text -> Element
+bind jid = Element bindName mempty [NodeElement bindElement]
+  where
+    bindElement = Element "jid" mempty [NodeContent jid]
 
 --------------------------------------------------
 -- OTHER STUFF
@@ -216,15 +244,15 @@ streamRespHeader from lang streamId =
                           (Just "http://etherx.jabber.org/streams")
                           (Just "stream")
 
-features :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
-features = XR.tag featureName mempty
+features :: [Node] -> Element
+features nodes = Element featureName mempty nodes
   where
     featureName = Name "features"
                        (Just "http://etherx.jabber.org/streams")
                        (Just "stream")
 
-required :: Monad m => ConduitT i Event m ()
-required = XR.tag "required" mempty (return ())
+required :: Element
+required = Element "required" mempty []
 
 awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
 awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
@@ -255,9 +283,10 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-bindHandler :: (MonadThrow m, PrimMonad m) =>
+{-
+bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m) =>
   Text ->
-  ConduitT BS.ByteString o m b ->
+  ConduitT Event o m b ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe b)
@@ -268,9 +297,12 @@ bindHandler jid sink i _ =
     doBind = do
       resource <- tagIgnoreAttrs (matching (==resourceName)) content
 
-      -- TODO remove fromJust
-      iq i "result" (bind $ jid <> "/" <> fromJust resource) .| XR.renderBytes def .| sink
-
+      case resource of
+        Nothing -> error "bad resource" -- TODO replace this
+        Just resource -> do
+          let fullResource = jid <> "/" <> resource
+          iq i "result" (bind $ fullResource) .| sink
+-}
 baseIqHandler i t = do
   c <- void takeAnyTreeContent .| consume
   return $ MkIq i t c
@@ -285,51 +317,64 @@ initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => Condui
 initiateStream sink = do
     streamId <- liftIO randomIO
     fqdn <- asks fqdn
-    streamRespHeader fqdn "en" streamId  .| XR.renderBytes def .| sink
+p    liftIO $ putStrLn "Sending stream response..."
+    streamRespHeader fqdn "en" streamId .| XR.renderBytes def .| sink
+    liftIO $ putStrLn "Done..."
     return streamId
 
 -- | Open a stream.
 openStream
-  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
-     ConduitM a BS.ByteString m () ->
-     ConduitT BS.ByteString c m r ->
+  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadIO m) =>
+     ConduitM a Event m () ->
+     ConduitT BS.ByteString c m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
      ConduitT a c m UUID
 openStream source sink = do
-  source .| parseBytes def .| awaitStream
+  source .| awaitStream
+  liftIO $ putStrLn "Got connection stream thing..."
   initiateStream sink
 
+{-
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
-handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => AppData -> m ()
-handleClient ad = handleClient' (appSource ad) (appSink ad)
+handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
+  AppData -> m ()
+handleClient ad = do
+  sink <- liftIO $ forkSink (appSink ad)
+  handleClient' (appSource ad .| parseBytes def) sink (appSink ad)
 
 -- Separated for testing
-handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) => ConduitM () BS.ByteString m () -> ConduitT BS.ByteString Void m () -> m ()
-handleClient' source sink = runConduit $ do
-  streamid <- openStream source sink
+--handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
+--  Map Text (ConduitT i Void m ()) -> ConduitM () Event m () -> ConduitT Event o m () -> m ()
+handleClient'
+  :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
+      MonadUnliftIO m, Show b) =>
+  ConduitM () Event m () -> ConduitT Event Void m b -> ConduitT BS.ByteString Void m b -> m ()
+handleClient' source sink bytesink = runConduit $ do
+  streamid <- openStream source bytesink
 
   -- Get user and pass
   auth <- plainAuth source sink
   case auth of
     Nothing -> do
-      notAuthorized .| XR.renderBytes def .| sink
+      notAuthorized .| sink
       liftIO $ putStrLn "Authentication failed."
     Just u  -> do
-      success .| XR.renderBytes def .| sink
+      success .| sink
       liftIO $ print auth
 
       -- Restart stream and present bind feature.
-      openStream source sink
-      bindFeatures .| XR.renderBytes def .| sink
+      openStream source bytesink
+      bindFeatures .| sink
 
       fqdn <- asks fqdn
       let jid = userJid fqdn u
 
-      iqStanza <- source .| parseBytes def .| receiveIq (bindHandler jid sink)
+      iqStanza <- source .| receiveIq (bindHandler jid sink)
       liftIO $ print iqStanza
 
       source .| awaitForever (liftIO . print)
       liftIO $ print "</stream> ;D"
+-}
 
 --------------------------------------------------
 -- Main server
@@ -340,13 +385,100 @@ main = do
   putStrLn "Running SQL migrations..."
   runSqlite (xmppDB def) $ runMigration migrateAll
   putStrLn "Starting server..."
+
+  -- Generate channel map.
+  cm <- atomically $ empty
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
 
-
 xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
-  GeneralApplicationStartTLS m () -- (AppData, (AppData -> m ()) -> m ()) -> m ()
+  GeneralApplicationStartTLS m ()
 xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
-  stls handleClient
+  stls $ undefined -- handleClient
+
+
+--------------------------------------------------
+-- Internal Server Communication
+--------------------------------------------------
+
+-- | Fork a sink!
+--
+-- Given a sink, create a new sink which goes through a channel, and
+-- then fork a thread which reads from the channel and sends output
+-- over the sink.>
+--
+-- Useful when you want the sink to by synchronized, so the sink can
+-- be written to on multiple threads without interleaving.
+--
+-- This also returns the synchronization channel.
+forkSink :: MonadIO m => ConduitM BS.ByteString Void IO () -> IO (ConduitT Element z m (), TMChan Element)
+forkSink sink = tmSink sink (\src sink -> runConduit $ src .| renderElements .| sink)
+
+-- TODO: needs a better name.
+-- | Create a synchronized sink which will be forwarded to some handler.
+tmSink
+  :: (MonadIO m1, MonadIO m2) =>
+     t
+     -> (ConduitT () a m1 () -> t -> IO ()) -- ^ source -> sink -> IO ()
+     -> IO (ConduitT a z m2 (), TMChan a)
+tmSink sink handler = do
+  chan <- liftIO newTMChanIO
+
+  let tmSource = sourceTMChan chan
+  let tmSink   = sinkTMChan chan
+
+  forkIO $ (handler tmSource sink)
+  return (tmSink, chan)
+
+-- TODO handle resource overlap?
+-- | Create internal communication channel.
+{-
+allocateChannel :: MonadIO m => Text -> (Map Text (ConduitT i Void m ())) -> (ConduitT () i m () -> IO ()) -> IO ()
+allocateChannel resource cm handler = do
+  sink <- tmSink handler
+  atomically $ STC.insert resource sink cm
+
+--forwardHandler :: (MonadUnliftIO m) => ConduitT a () m () -> ConduitT b c m () -> IO ()
+forwardHandler sink src = do
+  liftIO $ (runConduit $ src .| sink)
+  return ()
+-}
+
+{-
+chanToSink c s = do
+  e <- atomically $ readTMChan c
+  case e of
+    Nothing -> return ()
+    Just e  -> runConduit $ renderBytes (def {rsXMLDeclaration=False}) (elemToDoc e) .| s
+  chanToSink c s
+-}
+
+renderElements :: Monad m => ConduitT Element BS.ByteString m ()
+renderElements = do
+  e <- await
+  case e of
+    Nothing -> return ()
+    Just e  -> yield $ LBS.toStrict (renderLBS (def {rsXMLDeclaration=False}) (elemToDoc e))
+  renderElements
+
+eventConduitTest sink = do
+  chan <- liftIO $ newTMChanIO
+--  streamId <- liftIO $ randomIO
+
+  let tmSource = sourceTMChan chan
+  let tmSink   = sinkTMChan chan
+--  let docond = do v <- await; yield (fromJust v); liftIO $ print "test"; liftIO $ print v; docond
+
+  forkIO $ (runConduit $ tmSource .| renderElements .| sink)
+--  forkIO $ chanToSink chan sink
+  forkIO $ (runConduit $ yield testElement .| tmSink)
+
+
+testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
+emptyPrologue = Prologue [] Nothing []
+
+elemToDoc e = Document emptyPrologue e []
+
+testDocument = Document emptyPrologue testElement []
