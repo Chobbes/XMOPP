@@ -171,18 +171,20 @@ authenticate user pass = do
           else Nothing
         _ -> Nothing
 
-failure :: Monad m => ConduitT i Event m () -> ConduitT i Event m ()
-failure = XR.tag (Name "failure" (Just saslNamespace) Nothing) mempty
+failure :: [Node] -> Element
+failure = Element (Name "failure" (Just saslNamespace) Nothing) mempty
 
 -- TODO on receiving abort we need to reply with this
-aborted :: Monad m => ConduitT i Event m ()
-aborted = failure $ XR.tag "aborted" mempty (return ())
+aborted :: Element
+aborted = failure [NodeElement abortElement]
+  where abortElement = Element "aborted" mempty []
 
-notAuthorized :: Monad m => ConduitT i Event m ()
-notAuthorized = failure $ XR.tag "not-authorized" mempty (return ())
+notAuthorized :: Element
+notAuthorized = failure [NodeElement notAuthElement]
+  where notAuthElement = Element "not-authorized" mempty []
 
-success :: Monad m => ConduitT i Event m ()
-success = XR.tag (Name "success" (Just saslNamespace) Nothing) mempty (return ())
+success :: Element
+success = Element (Name "success" (Just saslNamespace) Nothing) mempty []
 
 authFeatures :: Element
 authFeatures = features [NodeElement mechanisms]
@@ -227,8 +229,9 @@ bind jid = Element bindName mempty [NodeElement bindElement]
 --------------------------------------------------
 
 -- TODO use IqStanza below?
-iq :: Monad m => Text -> Text -> ConduitT i Event m () -> ConduitT i Event m ()
-iq i t = XR.tag "iq" ((XR.attr "id" i) <> (XR.attr "type" t))
+iq :: Text -> Text -> [Node] -> Element
+iq i t = Element "iq" attrs
+  where attrs = M.fromList [("id", i), ("type", t)]
 
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
@@ -283,10 +286,9 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-{-
 bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m) =>
   Text ->
-  ConduitT Event o m b ->
+  ConduitT Element o m b ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe b)
@@ -301,8 +303,9 @@ bindHandler jid sink i _ =
         Nothing -> error "bad resource" -- TODO replace this
         Just resource -> do
           let fullResource = jid <> "/" <> resource
-          iq i "result" (bind $ fullResource) .| sink
--}
+          let iqNodes      = [NodeElement (bind fullResource)]
+          yield (iq i "result" iqNodes) .| sink
+
 baseIqHandler i t = do
   c <- void takeAnyTreeContent .| consume
   return $ MkIq i t c
@@ -333,13 +336,12 @@ openStream source sink = do
   liftIO $ putStrLn "Got connection stream thing..."
   initiateStream sink
 
-{-
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
 handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
   AppData -> m ()
 handleClient ad = do
-  sink <- liftIO $ forkSink (appSink ad)
+  (sink, chan) <- liftIO $ forkSink (appSink ad)
   handleClient' (appSource ad .| parseBytes def) sink (appSink ad)
 
 -- Separated for testing
@@ -348,7 +350,7 @@ handleClient ad = do
 handleClient'
   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
       MonadUnliftIO m, Show b) =>
-  ConduitM () Event m () -> ConduitT Event Void m b -> ConduitT BS.ByteString Void m b -> m ()
+  ConduitM () Event m () -> ConduitT Element Void m b -> ConduitT BS.ByteString Void m b -> m ()
 handleClient' source sink bytesink = runConduit $ do
   streamid <- openStream source bytesink
 
@@ -356,15 +358,15 @@ handleClient' source sink bytesink = runConduit $ do
   auth <- plainAuth source sink
   case auth of
     Nothing -> do
-      notAuthorized .| sink
+      yield notAuthorized .| sink
       liftIO $ putStrLn "Authentication failed."
     Just u  -> do
-      success .| sink
+      yield success .| sink
       liftIO $ print auth
 
       -- Restart stream and present bind feature.
       openStream source bytesink
-      bindFeatures .| sink
+      yield bindFeatures .| sink
 
       fqdn <- asks fqdn
       let jid = userJid fqdn u
@@ -374,7 +376,6 @@ handleClient' source sink bytesink = runConduit $ do
 
       source .| awaitForever (liftIO . print)
       liftIO $ print "</stream> ;D"
--}
 
 --------------------------------------------------
 -- Main server
@@ -396,7 +397,7 @@ xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, Mo
 xmpp (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
-  stls $ undefined -- handleClient
+  stls handleClient
 
 
 --------------------------------------------------
