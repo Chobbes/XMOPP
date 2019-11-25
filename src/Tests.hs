@@ -9,6 +9,11 @@ import Data.Conduit
 import Data.Default
 import Data.Conduit.List
 import Data.Text (Text, unpack)
+import Control.Concurrent.STM.TMVar
+import Control.Monad.STM
+import Control.Monad.IO.Class
+import Control.Monad.Reader.Class
+import Control.Monad.Reader
 
 import Main
 
@@ -47,3 +52,21 @@ test_login_success = undefined
 test_login_fail :: Test
 test_login_fail = undefined
 -}
+
+testSink :: MonadIO m => TMVar [a] -> ConduitT a o m ()
+testSink tv = do
+  e <- consume
+  liftIO $ atomically $ putTMVar tv e
+
+testInitiateStream :: IO ()
+testInitiateStream = do
+  tv <- newEmptyTMVarIO
+  let sink = testSink tv :: ConduitT ByteString o (ReaderT XMPPSettings IO) ()
+
+  -- Run the conduit getting its return value.
+  r <- runReaderT (runConduit $ initiateStream sink) def
+  print r
+
+  -- Check what's on the sink.
+  blah <- atomically $ readTMVar tv
+  print blah
