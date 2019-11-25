@@ -317,7 +317,7 @@ initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => Condui
 initiateStream sink = do
     streamId <- liftIO randomIO
     fqdn <- asks fqdn
-p    liftIO $ putStrLn "Sending stream response..."
+    liftIO $ putStrLn "Sending stream response..."
     streamRespHeader fqdn "en" streamId .| XR.renderBytes def .| sink
     liftIO $ putStrLn "Done..."
     return streamId
