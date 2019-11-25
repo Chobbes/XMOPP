@@ -16,6 +16,7 @@ import Control.Monad.Reader.Class
 import Control.Monad.Reader
 
 import Main
+import XMPP
 
 {-
 test_required :: Test

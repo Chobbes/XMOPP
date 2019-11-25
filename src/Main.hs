@@ -7,6 +7,7 @@
 {-# LANGUAGE QuasiQuotes                #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TypeFamilies               #-}
+{-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
 -- {-# OPTIONS_GHC -fdefer-type-errors  #-}
 module Main where
@@ -38,45 +39,20 @@ import Control.Monad.Reader.Class
 import Control.Monad.Reader
 import Control.Monad.IO.Unlift
 import Control.Monad
-import Database.Persist
-import Database.Persist.Sqlite
-import Database.Persist.TH
 import Data.Conduit.TMChan
 import GHC.Conc (atomically, forkIO, STM)
 import Conduit
 import Control.Concurrent.STM.Map as STC
 import Control.Concurrent.STM.TMChan
+import Database.Persist
+import Database.Persist.Sqlite
 import qualified Data.Map as M
 
---------------------------------------------------
--- Global XMPP settings
---------------------------------------------------
 
--- | Stream version?
-version :: Text
-version = "1.0"
-
-data XMPPSettings =
-  XMPPSettings { fqdn     :: Text
-               , xmppPort :: Int
-               , xmppDB   :: Text
-               }
-
-instance Default XMPPSettings where
-  def = XMPPSettings "localhost" 5222 "xmpp.db"
-
---------------------------------------------------
--- Database
---------------------------------------------------
-
--- TODO make sure passwords aren't plain text in the future.
-share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
-User
-    name Text
-    password Text
-    UniqueName name
-    deriving Show
-|]
+import Users
+import XMLRender
+import Concurrency
+import XMPP
 
 --------------------------------------------------
 -- TLS
@@ -286,13 +262,15 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
+{-
 bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m) =>
   Text ->
   ConduitT Element o m b ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe b)
-bindHandler jid sink i _ =
+-}
+bindHandler cm jid sink i _ =
   tagIgnoreAttrs (matching (==bindName)) doBind
   where
     resourceName = Name "resource" (Just bindNamespace) Nothing
@@ -304,7 +282,10 @@ bindHandler jid sink i _ =
         Just resource -> do
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
+--          liftIO $ allocateChannel cm fullResource handleMessages
           yield (iq i "result" iqNodes) .| sink
+
+handleMessages = undefined
 
 baseIqHandler i t = do
   c <- void takeAnyTreeContent .| consume
@@ -338,20 +319,23 @@ openStream source sink = do
 
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
-handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
-  AppData -> m ()
-handleClient ad = do
-  (sink, chan) <- liftIO $ forkSink (appSink ad)
-  handleClient' (appSource ad .| parseBytes def) sink (appSink ad)
+-- handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
+--   AppData -> m ()
+--handleClient :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
+--  Map Text (TMChan Element) -> AppData -> m ()
+handleClient cm ad =
+  do (sink, chan) <- liftIO $ forkSink (appSink ad)
+     handleClient' cm (appSource ad .| parseBytes def) sink (appSink ad)
 
 -- Separated for testing
 --handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
 --  Map Text (ConduitT i Void m ()) -> ConduitM () Event m () -> ConduitT Event o m () -> m ()
-handleClient'
-  :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
-      MonadUnliftIO m, Show b) =>
-  ConduitM () Event m () -> ConduitT Element Void m b -> ConduitT BS.ByteString Void m b -> m ()
-handleClient' source sink bytesink = runConduit $ do
+-- handleClient'
+--    :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
+--        MonadUnliftIO m, Show b) =>
+--    Map Text (TMChan Element) ->
+--    ConduitT () Event m () -> ConduitT Element Void m b -> ConduitT BS.ByteString Void m b -> m ()
+handleClient' cm source sink bytesink = runConduit $ do
   streamid <- openStream source bytesink
 
   -- Get user and pass
@@ -371,7 +355,7 @@ handleClient' source sink bytesink = runConduit $ do
       fqdn <- asks fqdn
       let jid = userJid fqdn u
 
-      iqStanza <- source .| receiveIq (bindHandler jid sink)
+      iqStanza <- source .| receiveIq (bindHandler cm jid sink)
       liftIO $ print iqStanza
 
       source .| awaitForever (liftIO . print)
@@ -390,79 +374,24 @@ main = do
   -- Generate channel map.
   cm <- atomically $ empty
   runReaderT (do port <- asks xmppPort
-                 runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") xmpp) def
+                 runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)) def
 
-xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
-  GeneralApplicationStartTLS m ()
-xmpp (appData, stls) = do
+-- xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
+--   GeneralApplicationStartTLS m ()
+xmpp :: ChanMap -> GeneralApplicationStartTLS XMPPMonad ()
+xmpp cm (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
-  stls handleClient
+  stls $ handleClient cm
 
 
 --------------------------------------------------
 -- Internal Server Communication
 --------------------------------------------------
 
--- | Fork a sink!
---
--- Given a sink, create a new sink which goes through a channel, and
--- then fork a thread which reads from the channel and sends output
--- over the sink.>
---
--- Useful when you want the sink to by synchronized, so the sink can
--- be written to on multiple threads without interleaving.
---
--- This also returns the synchronization channel.
-forkSink :: MonadIO m => ConduitM BS.ByteString Void IO () -> IO (ConduitT Element z m (), TMChan Element)
-forkSink sink = tmSink sink (\src sink -> runConduit $ src .| renderElements .| sink)
-
--- TODO: needs a better name.
--- | Create a synchronized sink which will be forwarded to some handler.
-tmSink
-  :: (MonadIO m1, MonadIO m2) =>
-     t
-     -> (ConduitT () a m1 () -> t -> IO ()) -- ^ source -> sink -> IO ()
-     -> IO (ConduitT a z m2 (), TMChan a)
-tmSink sink handler = do
-  chan <- liftIO newTMChanIO
-
-  let tmSource = sourceTMChan chan
-  let tmSink   = sinkTMChan chan
-
-  forkIO $ (handler tmSource sink)
-  return (tmSink, chan)
-
--- TODO handle resource overlap?
--- | Create internal communication channel.
-{-
-allocateChannel :: MonadIO m => Text -> (Map Text (ConduitT i Void m ())) -> (ConduitT () i m () -> IO ()) -> IO ()
-allocateChannel resource cm handler = do
-  sink <- tmSink handler
-  atomically $ STC.insert resource sink cm
-
---forwardHandler :: (MonadUnliftIO m) => ConduitT a () m () -> ConduitT b c m () -> IO ()
 forwardHandler sink src = do
   liftIO $ (runConduit $ src .| sink)
   return ()
--}
-
-{-
-chanToSink c s = do
-  e <- atomically $ readTMChan c
-  case e of
-    Nothing -> return ()
-    Just e  -> runConduit $ renderBytes (def {rsXMLDeclaration=False}) (elemToDoc e) .| s
-  chanToSink c s
--}
-
-renderElements :: Monad m => ConduitT Element BS.ByteString m ()
-renderElements = do
-  e <- await
-  case e of
-    Nothing -> return ()
-    Just e  -> yield $ LBS.toStrict (renderLBS (def {rsXMLDeclaration=False}) (elemToDoc e))
-  renderElements
 
 eventConduitTest sink = do
   chan <- liftIO $ newTMChanIO
@@ -478,8 +407,4 @@ eventConduitTest sink = do
 
 
 testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
-emptyPrologue = Prologue [] Nothing []
-
-elemToDoc e = Document emptyPrologue e []
-
 testDocument = Document emptyPrologue testElement []

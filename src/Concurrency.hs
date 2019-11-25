@@ -1,0 +1,65 @@
+module Concurrency where
+
+{- Module containing some concurrency utilities.
+
+  Most of this is for managing the sink to the client which needs to
+  be synchronized.
+-}
+
+import GHC.Conc (forkIO, atomically)
+
+import Data.Conduit
+import Data.Conduit.TMChan
+import Control.Concurrent.STM.TMChan
+import Control.Concurrent.STM.Map as STC
+
+import Control.Monad
+import Control.Monad.IO.Unlift
+
+import XMLRender
+import Text.XML
+
+import Data.Text
+import qualified Data.ByteString as BS
+
+import XMPP
+
+
+-- | Fork a sink!
+--
+-- Given a sink, create a new sink which goes through a channel, and
+-- then fork a thread which reads from the channel and sends output
+-- over the sink.>
+--
+-- Useful when you want the sink to by synchronized, so the sink can
+-- be written to on multiple threads without interleaving.
+--
+-- This also returns the synchronization channel.
+forkSink
+  :: (MonadUnliftIO m1, MonadIO m3) =>
+     ConduitT BS.ByteString Void m1 ()
+     -> m1 (ConduitT Element z m3 (), TMChan Element)
+forkSink sink = tmSink (\src -> runConduit $ src .| renderElements .| sink)
+
+
+-- TODO: needs a better name.
+-- | Create a synchronized sink which will be forwarded to some handler.
+tmSink
+  :: (MonadUnliftIO m1, MonadIO m2, MonadIO m3) =>
+     (ConduitT () a m2 () -> m1 ()) -> m1 (ConduitT a z m3 (), TMChan a)
+tmSink handler = do
+  chan <- liftIO newTMChanIO
+
+  let tmSource = sourceTMChan chan
+  let tmSink   = sinkTMChan chan
+
+  runHandler <- toIO $ handler tmSource
+  liftIO $ forkIO $ runHandler
+  return (tmSink, chan)
+
+-- allocateChannel
+--   :: ChanMap
+--      -> Text -> (ConduitT () Element XMPPMonad () -> XMPPMonad ()) -> XMPPMonad ()
+allocateChannel cm resource handler = do
+   (sink, chan) <- tmSink handler
+   liftIO $ atomically $ STC.insert resource sink cm
