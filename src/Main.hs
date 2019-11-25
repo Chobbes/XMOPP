@@ -81,7 +81,7 @@ startTLS ad = do
   (sink, chan) <- liftIO $ forkSink (appSink ad)
   startTLS' (appSource ad .| parseBytes def) sink (appSink ad)
 
-startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => ConduitM () Event m () -> ConduitM Element Void m () -> ConduitT BS.ByteString Void m () -> m ()
+startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => ConduitT () Event m () -> ConduitT Element Void m () -> ConduitT BS.ByteString Void m () -> m ()
 startTLS' source sink bytesink = runConduit $ do
   -- Use of bytesink is potentially dangerous, but should only be
   -- used before concurrency is an issue
@@ -122,8 +122,8 @@ saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
 -- | Get authentication information.
 plainAuth
   :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
-     ConduitM a1 Event m ()
-     -> ConduitM Element c m a2
+     ConduitT a1 Event m ()
+     -> ConduitT Element c m a2
      -> ConduitT a1 c m (Maybe User)
 plainAuth source sink = do
   yield authFeatures .| sink
@@ -309,7 +309,7 @@ initiateStream sink = do
 -- | Open a stream.
 openStream
   :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadIO m) =>
-     ConduitM a Event m () ->
+     ConduitT a Event m () ->
      ConduitT BS.ByteString c m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
      ConduitT a c m UUID
 openStream source sink = do
@@ -329,7 +329,7 @@ handleClient cm ad =
 
 -- Separated for testing
 --handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
---  Map Text (ConduitT i Void m ()) -> ConduitM () Event m () -> ConduitT Event o m () -> m ()
+--  Map Text (ConduitT i Void m ()) -> ConduitT () Event m () -> ConduitT Event o m () -> m ()
 -- handleClient'
 --    :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
 --        MonadUnliftIO m, Show b) =>

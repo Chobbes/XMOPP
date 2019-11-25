@@ -1,9 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 module Tests where
 
 import Test.HUnit
 import Control.Monad.ST
 import Text.XML.Stream.Render
+import Data.Maybe
+import Data.UUID
+import qualified Data.ByteString as BS
 import Data.ByteString.Char8
 import Data.Conduit
 import Data.Default
@@ -17,21 +21,54 @@ import Control.Monad.Reader
 
 import Main
 import XMPP
+import XMLRender
 
-{-
 test_required :: Test
-test_required = runST (runConduit $ required .| renderBytes def .| consume) ~?= [pack "<required/>"]
+test_required = renderElement required ~?=
+                pack "<required/>"
 
 test_proceed :: Test
-test_proceed = runST (runConduit $ proceed .| renderBytes def .| consume) ~?= [pack "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"]
+test_proceed = renderElement proceed ~?=
+               pack "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"
 
 test_success :: Test
-test_success = runST (runConduit $ success .| renderBytes def .| consume) ~?= [pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"]
+test_success = renderElement success ~?=
+               pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
+
+test_streamRespHeader :: Test
+test_streamRespHeader =
+  runST (runConduit $
+          streamRespHeader "localhost" "en"
+          (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
+          renderBytes def .|
+          consume) ~?=
+  [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 -- The following tests don't pass.
 -- Some weirdness with tag, prefixes, and namespaces.
 -- Doesn't match the spec, but seems to be ok for the client.
 
+tlsin :: Monad m => ConduitT i BS.ByteString m ()
+tlsin = yield $ pack $ Prelude.unlines
+        [ "<stream:stream"
+        , "from='juliet@im.example.com'"
+        , "to='im.example.com'"
+        , "version='1.0'"
+        , "xml:lang='en'"
+        , "xmlns='jabber:client'"
+        , "xmlns:stream='http://etherx.jabber.org/streams'>"
+        , "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" ]
+
+test_streamRespHeader :: Test
+test_streamRespHeader =
+  runST (runConduit $
+          streamRespHeader "localhost" "en"
+          (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
+          renderBytes def .|
+          consume) ~?=
+  [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+
+{-
 test_aborted :: Test
 test_aborted = runST (runConduit $ aborted .| renderBytes def .| consume) ~?= [pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"]
 
@@ -54,20 +91,31 @@ test_login_fail :: Test
 test_login_fail = undefined
 -}
 
+-- Tests that require IO
+
 testSink :: MonadIO m => TMVar [a] -> ConduitT a o m ()
 testSink tv = do
   e <- consume
   liftIO $ atomically $ putTMVar tv e
 
-testInitiateStream :: IO ()
-testInitiateStream = do
-  tv <- newEmptyTMVarIO
-  let sink = testSink tv :: ConduitT ByteString o (ReaderT XMPPSettings IO) ()
+test_initiateStream :: IO Bool
+test_initiateStream = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [ByteString]))
+  let sink = testSink tv :: ConduitT BS.ByteString o (ReaderT XMPPSettings IO) ()
 
-  -- Run the conduit getting its return value.
-  r <- runReaderT (runConduit $ initiateStream sink) def
-  print r
+  uuid <- runReaderT (runConduit $ initiateStream sink) def
+  sent <- atomically $ readTMVar tv
 
-  -- Check what's on the sink.
-  blah <- atomically $ readTMVar tv
-  print blah
+  return $ sent ==
+    [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ (show uuid) ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+
+main :: IO ()
+main = runTests tests
+  where
+    tests = [ (test_initiateStream, "initiateStream") ]
+
+    runTests [] = return ()
+    runTests ((t, name):ts) = do
+      result <- t
+      print $ name ++ (if result then " passed" else " failed")
+      runTests ts
