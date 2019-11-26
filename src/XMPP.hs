@@ -35,4 +35,4 @@ instance Default XMPPSettings where
   def = XMPPSettings "localhost" 5222 "xmpp.db"
 
 type XMPPMonad = ReaderT XMPPSettings IO
-type ChanMap   = Map Text (ConduitT Element Element XMPPMonad ())
+type ChanMap = Map Text (TMChan Element)

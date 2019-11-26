@@ -12,9 +12,11 @@ import Data.Conduit
 import Data.Conduit.TMChan
 import Control.Concurrent.STM.TMChan
 import Control.Concurrent.STM.Map as STC
+import Data.Hashable
 
 import Control.Monad
 import Control.Monad.IO.Unlift
+import Control.Monad.Trans.Class
 
 import XMLRender
 import Text.XML
@@ -57,9 +59,17 @@ tmSink handler = do
   liftIO $ forkIO $ runHandler
   return (tmSink, chan)
 
--- allocateChannel
---   :: ChanMap
---      -> Text -> (ConduitT () Element XMPPMonad () -> XMPPMonad ()) -> XMPPMonad ()
-allocateChannel cm resource handler = do
-   (sink, chan) <- tmSink handler
-   liftIO $ atomically $ STC.insert resource sink cm
+allocateChannel
+  :: (MonadIO m, Eq k, Hashable k) =>
+     Map k (TMChan a) -> k -> m (TMChan a)
+allocateChannel cm resource = do
+  chan <- liftIO newTMChanIO
+  liftIO $ atomically $ STC.insert resource chan cm
+  return chan
+
+createHandledChannel
+  :: (MonadIO (t m), Eq k, Hashable k, MonadTrans t, Monad m) =>
+     Map k (TMChan a) -> k -> (TMChan a -> m b) -> t m b
+createHandledChannel cm resource handler = do
+  chan <- allocateChannel cm resource
+  lift $ handler chan

@@ -262,14 +262,13 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-{-
 bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m) =>
+  ChanMap ->
   Text ->
   ConduitT Element o m b ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe b)
--}
 bindHandler cm jid sink i _ =
   tagIgnoreAttrs (matching (==bindName)) doBind
   where
@@ -282,10 +281,19 @@ bindHandler cm jid sink i _ =
         Just resource -> do
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
---          liftIO $ allocateChannel cm fullResource handleMessages
-          yield (iq i "result" iqNodes) .| sink
 
-handleMessages = undefined
+          r <- yield (iq i "result" iqNodes) .| sink
+          createHandledChannel cm fullResource (forwardHandler sink)
+          return r
+
+-- | Handler that forwards messages from a channel to a sink.
+forwardHandler :: MonadIO m => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler sink chan = do
+  elem <- liftIO $ atomically $ readTMChan chan
+  case elem of
+    Nothing   -> return ()
+    Just elem -> runConduit $ yield elem .| void sink .| Conduit.sinkNull
+  forwardHandler sink chan
 
 baseIqHandler i t = do
   c <- void takeAnyTreeContent .| consume
@@ -376,9 +384,8 @@ main = do
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)) def
 
--- xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
---   GeneralApplicationStartTLS m ()
-xmpp :: ChanMap -> GeneralApplicationStartTLS XMPPMonad ()
+xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
+  ChanMap -> GeneralApplicationStartTLS m ()
 xmpp cm (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
@@ -388,10 +395,6 @@ xmpp cm (appData, stls) = do
 --------------------------------------------------
 -- Internal Server Communication
 --------------------------------------------------
-
-forwardHandler sink src = do
-  liftIO $ (runConduit $ src .| sink)
-  return ()
 
 eventConduitTest sink = do
   chan <- liftIO $ newTMChanIO
