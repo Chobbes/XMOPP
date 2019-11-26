@@ -6,7 +6,7 @@ module Concurrency where
   be synchronized.
 -}
 
-import GHC.Conc (forkIO, atomically)
+import GHC.Conc (atomically)
 
 import Data.Conduit
 import Data.Conduit.TMChan
@@ -23,6 +23,7 @@ import Text.XML
 
 import Data.Text
 import qualified Data.ByteString as BS
+import UnliftIO.Concurrent
 
 import XMPP
 
@@ -55,8 +56,7 @@ tmSink handler = do
   let tmSource = sourceTMChan chan
   let tmSink   = sinkTMChan chan
 
-  runHandler <- toIO $ handler tmSource
-  liftIO $ forkIO $ runHandler
+  forkIO $ handler tmSource
   return (tmSink, chan)
 
 allocateChannel
@@ -68,8 +68,8 @@ allocateChannel cm resource = do
   return chan
 
 createHandledChannel
-  :: (MonadIO (t m), Eq k, Hashable k, MonadTrans t, Monad m) =>
-     Map k (TMChan a) -> k -> (TMChan a -> m b) -> t m b
+  :: (MonadIO (t m), Eq k, Hashable k, MonadTrans t, Monad m, MonadUnliftIO m) =>
+     Map k (TMChan a) -> k -> (TMChan a -> m b) -> t m ()
 createHandledChannel cm resource handler = do
   chan <- allocateChannel cm resource
-  lift $ handler chan
+  void . lift . forkIO . void $ handler chan

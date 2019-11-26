@@ -35,15 +35,6 @@ test_success :: Test
 test_success = renderElement success ~?=
                pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
 
-test_streamRespHeader :: Test
-test_streamRespHeader =
-  runST (runConduit $
-          streamRespHeader "localhost" "en"
-          (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
-          renderBytes def .|
-          consume) ~?=
-  [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
-
 -- The following tests don't pass.
 -- Some weirdness with tag, prefixes, and namespaces.
 -- Doesn't match the spec, but seems to be ok for the client.

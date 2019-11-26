@@ -47,7 +47,7 @@ import Control.Concurrent.STM.TMChan
 import Database.Persist
 import Database.Persist.Sqlite
 import qualified Data.Map as M
-
+import Control.Concurrent (ThreadId)
 
 import Users
 import XMLRender
@@ -262,7 +262,7 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m) =>
+bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
   ChanMap ->
   Text ->
   ConduitT Element o m b ->
@@ -282,12 +282,11 @@ bindHandler cm jid sink i _ =
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
 
-          r <- yield (iq i "result" iqNodes) .| sink
           createHandledChannel cm fullResource (forwardHandler sink)
-          return r
+          yield (iq i "result" iqNodes) .| sink
 
 -- | Handler that forwards messages from a channel to a sink.
-forwardHandler :: MonadIO m => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler :: (MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
 forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
@@ -380,7 +379,7 @@ main = do
   putStrLn "Starting server..."
 
   -- Generate channel map.
-  cm <- atomically $ empty
+  cm <- atomically empty
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)) def
 
@@ -397,16 +396,16 @@ xmpp cm (appData, stls) = do
 --------------------------------------------------
 
 eventConduitTest sink = do
-  chan <- liftIO $ newTMChanIO
+  chan <- liftIO newTMChanIO
 --  streamId <- liftIO $ randomIO
 
   let tmSource = sourceTMChan chan
   let tmSink   = sinkTMChan chan
 --  let docond = do v <- await; yield (fromJust v); liftIO $ print "test"; liftIO $ print v; docond
 
-  forkIO $ (runConduit $ tmSource .| renderElements .| sink)
+  forkIO (runConduit $ tmSource .| renderElements .| sink)
 --  forkIO $ chanToSink chan sink
-  forkIO $ (runConduit $ yield testElement .| tmSink)
+  forkIO (runConduit $ yield testElement .| tmSink)
 
 
 testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
