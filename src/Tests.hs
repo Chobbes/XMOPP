@@ -35,10 +35,6 @@ test_success :: Test
 test_success = renderElement success ~?=
                pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
 
--- The following tests don't pass.
--- Some weirdness with tag, prefixes, and namespaces.
--- Doesn't match the spec, but seems to be ok for the client.
-
 tlsin :: Monad m => ConduitT i BS.ByteString m ()
 tlsin = yield $ pack $ Prelude.unlines
         [ "<stream:stream"
@@ -59,28 +55,42 @@ test_streamRespHeader =
           consume) ~?=
   [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
-{-
+-- The following tests don't pass.
+-- Some weirdness with tag, prefixes, and namespaces.
+-- Doesn't match the spec, but seems to be ok for the client.
+
 test_aborted :: Test
-test_aborted = runST (runConduit $ aborted .| renderBytes def .| consume) ~?= [pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"]
+test_aborted = renderElement aborted ~?=
+               pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"
 
 test_tlsFeatures :: Test
-test_tlsFeatures = runST (runConduit $ tlsFeatures .| renderBytes def .| consume) ~?= [pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"]
+test_tlsFeatures = renderElement tlsFeatures ~?=
+                   pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"
 
 test_authFeatures :: Test
-test_authFeatures = runST (runConduit $ authFeatures .| renderBytes def .| consume) ~?= [pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"]
+test_authFeatures = renderElement authFeatures ~?=
+                    pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"
 
 test_bindFeatures :: Test
-test_bindFeatures = runST (runConduit $ bindFeatures .| renderBytes def .| consume) ~?= [pack "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>"]
+test_bindFeatures = renderElement bindFeatures ~?=
+                    pack "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>"
 
 test_bind :: Test
-test_bind = runST (runConduit $ (bind "test") .| renderBytes def .| consume) ~?= [pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"]
+test_bind = renderElement (bind "test") ~?=
+            pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"
 
 test_login_success :: Test
 test_login_success = undefined
 
 test_login_fail :: Test
 test_login_fail = undefined
--}
+
+tests :: Test
+tests = TestList
+  [ "required" ~: test_required
+  , "proceed"  ~: test_proceed
+  , "success"  ~: test_success
+  , "streamRespHeader" ~: test_streamRespHeader ]
 
 -- Tests that require IO
 
@@ -101,9 +111,11 @@ test_initiateStream = do
     [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ (show uuid) ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 main :: IO ()
-main = runTests tests
+main = do
+  runTestTT tests
+  runTests ioTests
   where
-    tests = [ (test_initiateStream, "initiateStream") ]
+    ioTests = [ (test_initiateStream, "initiateStream") ]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do
