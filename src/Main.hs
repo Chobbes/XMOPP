@@ -50,7 +50,7 @@ import Database.Persist
 import Database.Persist.Sqlite
 import qualified Data.Map as M
 import Control.Concurrent (ThreadId)
-import Text.XML.Unresolved
+import Control.Concurrent.Thread.Delay
 import Data.Hashable
 
 import Users
@@ -266,29 +266,69 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
--- receiveMessage :: MonadThrow m => ConduitT Event o m (Maybe c)
-receiveMessage handler = do
-  -- takeTree (matching (==msgname)) ((,) <$> requireAttr "to" <*> requireAttr "from") .| handler
-  tag' (matching (==msgname)) ((\a b _ -> (a, b)) <$> requireAttr "to" <*> requireAttr "from" <*> ignoreAttrs) $ uncurry handler
+-- receiveMessage
+--   :: MonadThrow m =>
+--      (Element -> m ()) -> ConduitT Event o m ()
+receiveMessage handler =
+  tag' (matching (==msgname)) ((,) <$> requireAttr "to" <*> requireAttr "from" <* ignoreAttrs) (uncurry handler)
+{-
+  CL.map (Nothing,) .| do
+  elem <- documentRoot <$> fromEvents
+  if elementName elem /= "message"
+    then return ()
+    else lift $ handler elem
+-}
 
-messageHandler cm to from = CL.map (Nothing,) .| do
-  liftIO $ print (to, from)
-  channels <- liftIO . atomically $ STC.lookup to cm
-  elem <- elementFromEvents'
-  case elem of
-    Nothing   -> return ()
-    Just elem -> writeToAllChannels (fromMaybe [] channels) elem
+-- <body>u</body>
+-- <origin-id xmlns="urn:xmpp:sid:0" id="685e8415-cebe-4694-b2cd-76dcd06ccb6b" />
+-- <request xmlns="urn:xmpp:receipts" />
+-- <thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread>
+
+messageHandler cm to from = do
+  let elem = Element "message" (M.fromList [("to", to), ("from", from)]) [NodeElement (Element "body" mempty [NodeContent "yay"])]
+  sendToJid cm to elem
+
+-- | Look up channels associated with a given jid in the channel map, and send
+-- an element over that channel.
+sendToJid
+  :: MonadIO m =>
+     ChanMap -> Text -> Element -> m ()
+sendToJid cm to elem = do
+  channels <- liftIO . atomically $ do
+    mm <- STC.lookup to cm
+    case mm of
+      Nothing      -> return []
+      Just (rs, m) -> forM rs $ \r -> do
+        maybeChan <- STC.lookup r m
+        return (fromMaybe [] (fmap (:[]) maybeChan))
+  liftIO $ putStrLn $ "Message to: " ++ show to
+  liftIO $ print $ length channels
+  writeToAllChannels (Prelude.concat channels) elem
+
+skipToEnd :: Monad m => Name -> ConduitT Event Event m ()
+skipToEnd name = do
+  x <- await
+  case x of
+    Nothing -> return ()
+    (Just e@(EventEndElement n)) -> if n == name then yield e else skipToEnd name
+    _ -> skipToEnd name
 
 msgname = (Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing})
 
 testiq :: BS.ByteString
 testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
 
-testmsg :: BS.ByteString
-testmsg = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42c8-88a2-997e592ef16d\" to=\"foo@localhost\" type=\"chat\">yay</message>"
+testmsg2 :: BS.ByteString
+testmsg2 = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42c8-88a2-997e592ef16d\" to=\"foo@localhost\" type=\"chat\">ahhhhh</message>"
 
-elementFromEvents' :: MonadThrow m => ConduitT EventPos o m (Maybe Element)
-elementFromEvents' = fmap (fmap elemConvert) elementFromEvents
+testmsg :: BS.ByteString
+testmsg = "<message xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
+
+-- elementFromEvents' :: MonadThrow m => ConduitT EventPos o m (Maybe Document)
+-- elementFromEvents' = fmap (fmap documentConvert) fromEvents
+
+-- documentConvert :: XT.Document -> Document
+-- documentConvert = undefined
 
 elemConvert :: XT.Element -> Element
 elemConvert (XT.Element name attrs nodes)
@@ -334,16 +374,18 @@ bindHandler cm jid sink i _ =
           let iqNodes      = [NodeElement (bind fullResource)]
 
           liftIO $ putStrLn "Adding channel..."
-          createHandledChannel cm fullResource (forwardHandler sink)
+          createHandledChannel cm jid resource (forwardHandler sink)
           yield (iq i "result" iqNodes) .| sink
 
 -- | Handler that forwards messages from a channel to a sink.
-forwardHandler :: (MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler :: (Show a, MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
 forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
     Nothing   -> return ()
-    Just elem -> runConduit $ yield elem .| void sink .| Conduit.sinkNull
+    Just elem -> do
+      liftIO . putStrLn $ "Forwarding: " ++ show elem
+      runConduit $ yield elem .| void sink .| Conduit.sinkNull
   forwardHandler sink chan
 
 baseIqHandler i t = do
@@ -416,6 +458,10 @@ handleClient' cm source sink bytesink = runConduit $ do
 
       iqStanza <- source .| receiveIq (bindHandler cm jid sink)
       liftIO $ print iqStanza
+
+      source .| ignoreAnyTreeContent
+      source .| ignoreAnyTreeContent
+      source .| ignoreAnyTreeContent
 
       source .| awaitForever (\e -> yield e .| receiveMessage (messageHandler cm))
 
