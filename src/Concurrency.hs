@@ -32,16 +32,16 @@ import XMPP
 --
 -- Given a sink, create a new sink which goes through a channel, and
 -- then fork a thread which reads from the channel and sends output
--- over the sink.>
+-- over the sink.
 --
--- Useful when you want the sink to by synchronized, so the sink can
+-- Useful when you want the sink to be synchronized, so the sink can
 -- be written to on multiple threads without interleaving.
 --
 -- This also returns the synchronization channel.
 forkSink
-  :: (MonadUnliftIO m1, MonadIO m3) =>
+  :: (MonadUnliftIO m1, MonadIO m2) =>
      ConduitT BS.ByteString Void m1 ()
-     -> m1 (ConduitT Element z m3 (), TMChan Element)
+     -> m1 (ConduitT Element o m2 (), TMChan Element)
 forkSink sink = tmSink (\src -> runConduit $ src .| renderElements .| sink)
 
 
@@ -49,7 +49,7 @@ forkSink sink = tmSink (\src -> runConduit $ src .| renderElements .| sink)
 -- | Create a synchronized sink which will be forwarded to some handler.
 tmSink
   :: (MonadUnliftIO m1, MonadIO m2, MonadIO m3) =>
-     (ConduitT () a m2 () -> m1 ()) -> m1 (ConduitT a z m3 (), TMChan a)
+     (ConduitT () i m2 () -> m1 ()) -> m1 (ConduitT i o m3 (), TMChan i)
 tmSink handler = do
   chan <- liftIO newTMChanIO
 

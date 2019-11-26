@@ -113,7 +113,7 @@ tlsFeatures = features [NodeElement tlsFeature]
     tlsName    = Name "starttls" (Just tlsNamespace)
                                  Nothing
 
-awaitStartTls :: MonadThrow m => ConduitT Event a m (Maybe Event)
+awaitStartTls :: MonadThrow m => ConduitT Event o m (Maybe Event)
 awaitStartTls = awaitName (Name {nameLocalName = "starttls", nameNamespace = Just tlsNamespace, namePrefix = Nothing})
 
 --------------------------------------------------
@@ -126,9 +126,9 @@ saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
 -- | Get authentication information.
 plainAuth
   :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
-     ConduitT a1 Event m ()
-     -> ConduitT Element c m a2
-     -> ConduitT a1 c m (Maybe User)
+     ConduitT i Event m ()
+     -> ConduitT Element o m r
+     -> ConduitT i o m (Maybe User)
 plainAuth source sink = do
   yield authFeatures .| sink
   auth <- source .| awaitAuth
@@ -175,7 +175,7 @@ authFeatures = features [NodeElement mechanisms]
                           Nothing
     plain = Element (Name "mechanism" Nothing Nothing) mempty [NodeContent "PLAIN"]
 
-awaitAuth :: MonadThrow m => ConduitT Event a m (Maybe (Text, Text))
+awaitAuth :: MonadThrow m => ConduitT Event o m (Maybe (Text, Text))
 awaitAuth = do
   authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content -- TODO check for mechanism='PLAIN'
   return $ do
@@ -237,10 +237,10 @@ features nodes = Element featureName mempty nodes
 required :: Element
 required = Element "required" mempty []
 
-awaitStream :: MonadThrow m => ConduitT Event a m (Maybe Event)
+awaitStream :: MonadThrow m => ConduitT Event o m (Maybe Event)
 awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
 
-awaitName :: MonadThrow m => Name -> ConduitT Event a m (Maybe Event)
+awaitName :: MonadThrow m => Name -> ConduitT Event o m (Maybe Event)
 awaitName name = do
   element <- await
   case element of
@@ -262,11 +262,13 @@ data IqStanza = MkIq { iqId   :: Text
                 deriving (Eq, Show)
 
 
-receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT Event o m (Maybe c)
+receiveIq :: MonadThrow m =>
+  (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
--- receiveMessage :: MonadThrow m => ConduitT Event o m (Maybe c)
+receiveMessage :: MonadThrow m =>
+  (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
 receiveMessage handler = do
   -- takeTree (matching (==msgname)) ((,) <$> requireAttr "to" <*> requireAttr "from") .| handler
   tag' (matching (==msgname)) ((\a b _ -> (a, b)) <$> requireAttr "to" <*> requireAttr "from" <*> ignoreAttrs) $ uncurry handler
@@ -279,7 +281,7 @@ messageHandler cm to from = CL.map (Nothing,) .| do
     Nothing   -> return ()
     Just elem -> writeToAllChannels (fromMaybe [] channels) elem
 
-msgname = (Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing})
+msgname = Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing}
 
 testiq :: BS.ByteString
 testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
@@ -311,15 +313,15 @@ contentToText (ContentEntity c) = c
 writeToAllChannels
   :: MonadIO m => [TMChan a] -> a -> m ()
 writeToAllChannels channels elem =
-  forM_ channels $ \chan -> liftIO . atomically $ writeTMChan chan elem  
+  forM_ channels $ \chan -> liftIO . atomically $ writeTMChan chan elem
 
 bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
   ChanMap ->
   Text ->
-  ConduitT Element o m b ->
+  ConduitT Element o m r ->
   Text ->
   Text ->
-  ConduitT Event o m (Maybe b)
+  ConduitT Event o m (Maybe r)
 bindHandler cm jid sink i _ =
   tagIgnoreAttrs (matching (==bindName)) doBind
   where
@@ -338,7 +340,7 @@ bindHandler cm jid sink i _ =
           yield (iq i "result" iqNodes) .| sink
 
 -- | Handler that forwards messages from a channel to a sink.
-forwardHandler :: (MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler :: (MonadIO m, MonadUnliftIO m) => ConduitT i o m r -> TMChan i -> m ()
 forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
@@ -356,7 +358,8 @@ userJid fqdn u = userName u <> "@" <> fqdn
 -- TODO wrap AppData / configuration in a reader monad?
 
 -- | Generate a new initial stream header with a new UUID.
-initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) => ConduitT BS.ByteString o m r -> ConduitT i o m UUID
+initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
+  ConduitT BS.ByteString o m r -> ConduitT i o m UUID
 initiateStream sink = do
     streamId <- liftIO randomIO
     fqdn <- asks fqdn
@@ -368,9 +371,9 @@ initiateStream sink = do
 -- | Open a stream.
 openStream
   :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadIO m) =>
-     ConduitT a Event m () ->
-     ConduitT BS.ByteString c m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
-     ConduitT a c m UUID
+     ConduitT i Event m () ->
+     ConduitT BS.ByteString o m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
+     ConduitT i o m UUID
 openStream source sink = do
   source .| awaitStream
   liftIO $ putStrLn "Got connection stream thing..."
@@ -389,11 +392,13 @@ handleClient cm ad =
 -- Separated for testing
 --handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
 --  Map Text (ConduitT i Void m ()) -> ConduitT () Event m () -> ConduitT Event o m () -> m ()
--- handleClient'
---    :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
---        MonadUnliftIO m, Show b) =>
---    Map Text (TMChan Element) ->
---    ConduitT () Event m () -> ConduitT Element Void m b -> ConduitT BS.ByteString Void m b -> m ()
+handleClient'
+   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, Show r) =>
+   ChanMap ->
+   ConduitT () Event m () ->
+   ConduitT Element Void m r ->
+   ConduitT BS.ByteString Void m r ->
+   m ()
 handleClient' cm source sink bytesink = runConduit $ do
   streamid <- openStream source bytesink
 
@@ -421,7 +426,6 @@ handleClient' cm source sink bytesink = runConduit $ do
 
       source .| awaitForever (liftIO . print)
       liftIO $ print "</stream> ;D"
-
 --------------------------------------------------
 -- Main server
 --------------------------------------------------
