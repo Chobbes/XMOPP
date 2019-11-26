@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE EmptyDataDecls             #-}
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GADTs                      #-}
@@ -22,6 +23,7 @@ import Data.Text (Text, unpack)
 import Data.Text.Encoding
 import qualified Data.Text as T
 import Data.XML.Types (Event(..), Content(..))
+import qualified Data.XML.Types as XT
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Text.XML.Stream.Render as XR
@@ -48,6 +50,8 @@ import Database.Persist
 import Database.Persist.Sqlite
 import qualified Data.Map as M
 import Control.Concurrent (ThreadId)
+import Text.XML.Unresolved
+import Data.Hashable
 
 import Users
 import XMLRender
@@ -262,6 +266,53 @@ receiveIq :: MonadThrow m => (Text -> Text -> ConduitT Event o m c) -> ConduitT 
 receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
+-- receiveMessage :: MonadThrow m => ConduitT Event o m (Maybe c)
+receiveMessage handler = do
+  -- takeTree (matching (==msgname)) ((,) <$> requireAttr "to" <*> requireAttr "from") .| handler
+  tag' (matching (==msgname)) ((\a b _ -> (a, b)) <$> requireAttr "to" <*> requireAttr "from" <*> ignoreAttrs) $ uncurry handler
+
+messageHandler cm to from = CL.map (Nothing,) .| do
+  liftIO $ print (to, from)
+  channels <- liftIO . atomically $ STC.lookup to cm
+  elem <- elementFromEvents'
+  case elem of
+    Nothing   -> return ()
+    Just elem -> writeToAllChannels (fromMaybe [] channels) elem
+
+msgname = (Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing})
+
+testiq :: BS.ByteString
+testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
+
+testmsg :: BS.ByteString
+testmsg = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42c8-88a2-997e592ef16d\" to=\"foo@localhost\" type=\"chat\">yay</message>"
+
+elementFromEvents' :: MonadThrow m => ConduitT EventPos o m (Maybe Element)
+elementFromEvents' = fmap (fmap elemConvert) elementFromEvents
+
+elemConvert :: XT.Element -> Element
+elemConvert (XT.Element name attrs nodes)
+  = Element name attrs' undefined
+  -- TODO: I have no idea if this is remotely right, but I have no choice.
+  -- Possibly look up contentsToText in XML stream parse
+  where attrs' = M.fromList $
+          (\(n, c) -> (n, mconcat $ contentToText <$> c)) <$> attrs
+
+nodeConvert :: XT.Node -> Node
+nodeConvert (XT.NodeElement e)     = NodeElement (elemConvert e)
+nodeConvert (XT.NodeInstruction i) = NodeInstruction i
+nodeConvert (XT.NodeContent c)     = NodeContent (contentToText c)
+nodeConvert (XT.NodeComment c)     = NodeComment c
+
+contentToText :: Content -> Text
+contentToText (ContentText c)   = c
+contentToText (ContentEntity c) = c
+
+writeToAllChannels
+  :: MonadIO m => [TMChan a] -> a -> m ()
+writeToAllChannels channels elem =
+  forM_ channels $ \chan -> liftIO . atomically $ writeTMChan chan elem  
+
 bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
   ChanMap ->
   Text ->
@@ -282,6 +333,7 @@ bindHandler cm jid sink i _ =
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
 
+          liftIO $ putStrLn "Adding channel..."
           createHandledChannel cm fullResource (forwardHandler sink)
           yield (iq i "result" iqNodes) .| sink
 
@@ -364,6 +416,8 @@ handleClient' cm source sink bytesink = runConduit $ do
 
       iqStanza <- source .| receiveIq (bindHandler cm jid sink)
       liftIO $ print iqStanza
+
+      source .| awaitForever (\e -> yield e .| receiveMessage (messageHandler cm))
 
       source .| awaitForever (liftIO . print)
       liftIO $ print "</stream> ;D"

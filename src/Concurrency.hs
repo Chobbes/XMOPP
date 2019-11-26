@@ -59,17 +59,22 @@ tmSink handler = do
   forkIO $ handler tmSource
   return (tmSink, chan)
 
+-- TODO: Need a way for channels to remove themselves???
 allocateChannel
   :: (MonadIO m, Eq k, Hashable k) =>
-     Map k (TMChan a) -> k -> m (TMChan a)
+     Map k [TMChan a] -> k -> m (TMChan a)
 allocateChannel cm resource = do
   chan <- liftIO newTMChanIO
-  liftIO $ atomically $ STC.insert resource chan cm
+  liftIO $ atomically $ do
+    cs <- STC.lookup resource cm
+    case cs of
+      Nothing -> STC.insert resource [chan] cm
+      Just cs -> STC.insert resource (chan:cs) cm
   return chan
 
 createHandledChannel
   :: (MonadIO (t m), Eq k, Hashable k, MonadTrans t, Monad m, MonadUnliftIO m) =>
-     Map k (TMChan a) -> k -> (TMChan a -> m b) -> t m ()
+     Map k [TMChan a] -> k -> (TMChan a -> m b) -> t m ()
 createHandledChannel cm resource handler = do
   chan <- allocateChannel cm resource
   void . lift . forkIO . void $ handler chan
