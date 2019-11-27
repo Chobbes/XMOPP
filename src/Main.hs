@@ -265,23 +265,38 @@ data IqStanza = MkIq { iqId   :: Text
 receiveIq :: MonadThrow m =>
   (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
 receiveIq handler =
-  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
+  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) $ uncurry handler
 
--- receiveMessage
---   :: MonadThrow m =>
---      (Element -> m ()) -> ConduitT Event o m ()
 receiveMessage handler =
-  tag' (matching (==msgname)) ((,) <$> requireAttr "to" <*> requireAttr "from" <* ignoreAttrs) (uncurry handler)
+  tag' (matching (==msgname)) ((\t f i -> (t,f,i)) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <* ignoreAttrs) (\(t,f,i) -> handler t f i)
+
 {-
-  CL.map (Nothing,) .| do
-  elem <- documentRoot <$> fromEvents
-  if elementName elem /= "message"
-    then return ()
-    else lift $ handler elem
+<message xmlns="jabber:client" from="test@localhost/gajim.CD9NEZ09" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" to="foo@localhost" type="chat">
+<body>Howdy.</body>
+<origin-id xmlns="urn:xmpp:sid:0" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" />
+<request xmlns="urn:xmpp:receipts" />
+<thread>qcWrRbPgEZtEWtRxcswgkwhDFpAFZiPR</thread>
+</message>
 -}
 
-messageHandler cm to from = do
-  let elem = Element "message" (M.fromList [("to", to), ("from", from)]) [NodeElement (Element "body" mempty [NodeContent "yay"])]
+
+messageHandler cm to from i = do
+  liftIO . putStrLn $ "Message to: " ++ show to
+
+  -- Read message contents
+  body <- tagIgnoreAttrs "{jabber:client}body" content
+  ignoreAnyTreeContent  -- Ignore origin-id, already have information from it.
+  ignoreAnyTreeContent
+  threadId <- tagIgnoreAttrs "{jabber:client}thread" content
+
+  -- Need to construct message element to send.
+  let elem = Element "{jabber:client}message" (M.fromList [("from", from), ("to", to)])
+             [ NodeElement (Element "{jabber:client}body" mempty [NodeContent (fromJust body)])
+             , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
+             , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
+             , NodeElement (Element "{jabber:client}thread" mempty [NodeContent (fromJust threadId)])
+             ]
+
   sendToJid cm to elem
 
 -- | Look up channels associated with a given jid in the channel map, and send
@@ -380,7 +395,7 @@ forwardHandler sink chan = do
   case elem of
     Nothing   -> return ()
     Just elem -> do
-      liftIO . putStrLn $ "Forwarding: " ++ show elem
+--      liftIO . putStrLn $ "Forwarding: " ++ show elem
       runConduit $ yield elem .| void sink .| Conduit.sinkNull
   forwardHandler sink chan
 
@@ -462,10 +477,12 @@ handleClient' cm source sink bytesink = runConduit $ do
       source .| ignoreAnyTreeContent
       source .| ignoreAnyTreeContent
 
-      source .| awaitForever (\e -> yield e .| receiveMessage (messageHandler cm))
+      messageLoop
 
-      source .| awaitForever (liftIO . print)
       liftIO $ print "</stream> ;D"
+    where messageLoop = do
+            source .| receiveMessage (messageHandler cm)
+            messageLoop
 --------------------------------------------------
 -- Main server
 --------------------------------------------------
