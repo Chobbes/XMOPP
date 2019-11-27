@@ -31,6 +31,10 @@ import Data.Conduit.TMChan
 import Main
 import XMPP
 import XMLRender
+import Stream
+import TLS
+import SASL
+import Iq
 
 test_required :: Test
 test_required = renderElement required ~?=

@@ -8,6 +8,7 @@ module Concurrency where
 
 import GHC.Conc (atomically)
 
+import Conduit
 import Data.Conduit
 import Data.Conduit.TMChan
 import Control.Concurrent.STM.TMChan
@@ -23,7 +24,7 @@ import Text.XML
 
 import Data.Text
 import qualified Data.ByteString as BS
-import UnliftIO.Concurrent
+import UnliftIO.Concurrent (forkIO)
 
 import XMPP
 
@@ -84,3 +85,14 @@ createHandledChannel
 createHandledChannel cm key resource handler = do
   chan <- allocateChannel cm key resource
   void . lift . forkIO . void $ handler chan
+
+-- | Handler that forwards messages from a channel to a sink.
+forwardHandler :: (Show a, MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler sink chan = do
+  elem <- liftIO $ atomically $ readTMChan chan
+  case elem of
+    Nothing   -> return ()
+    Just elem -> do
+--      liftIO . putStrLn $ "Forwarding: " ++ show elem
+      runConduit $ yield elem .| void sink .| Conduit.sinkNull
+  forwardHandler sink chan
