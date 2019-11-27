@@ -268,21 +268,9 @@ receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) $ uncurry handler
 
 receiveMessage handler =
-  tag' (matching (==msgname)) ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
-
-{-
-<message xmlns="jabber:client" from="test@localhost/gajim.CD9NEZ09" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" to="foo@localhost" type="chat">
-<body>Howdy.</body>
-<origin-id xmlns="urn:xmpp:sid:0" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" />
-<request xmlns="urn:xmpp:receipts" />
-<thread>qcWrRbPgEZtEWtRxcswgkwhDFpAFZiPR</thread>
-</message>
--}
-
+  tag' "{jabber:client}message" ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
 
 messageHandler cm to from i ty = do
-  liftIO . putStrLn $ "Message to: " ++ show to
-
   -- Read message contents
   body <- tagIgnoreAttrs "{jabber:client}body" content
   ignoreAnyTreeContent  -- Ignore origin-id, already have information from it.
@@ -341,49 +329,6 @@ sendToResource cm jid resource elem = do
   case mchan of
     Nothing   -> return ()
     Just chan -> liftIO . atomically $ writeTMChan chan elem
-
-skipToEnd :: Monad m => Name -> ConduitT Event Event m ()
-skipToEnd name = do
-  x <- await
-  case x of
-    Nothing -> return ()
-    (Just e@(EventEndElement n)) -> if n == name then yield e else skipToEnd name
-    _ -> skipToEnd name
-
-msgname = Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing}
-
-testiq :: BS.ByteString
-testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
-
-testmsg2 :: BS.ByteString
-testmsg2 = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42c8-88a2-997e592ef16d\" to=\"foo@localhost\" type=\"chat\">ahhhhh</message>"
-
-testmsg :: BS.ByteString
-testmsg = "<message xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
-
--- elementFromEvents' :: MonadThrow m => ConduitT EventPos o m (Maybe Document)
--- elementFromEvents' = fmap (fmap documentConvert) fromEvents
-
--- documentConvert :: XT.Document -> Document
--- documentConvert = undefined
-
-elemConvert :: XT.Element -> Element
-elemConvert (XT.Element name attrs nodes)
-  = Element name attrs' undefined
-  -- TODO: I have no idea if this is remotely right, but I have no choice.
-  -- Possibly look up contentsToText in XML stream parse
-  where attrs' = M.fromList $
-          (\(n, c) -> (n, mconcat $ contentToText <$> c)) <$> attrs
-
-nodeConvert :: XT.Node -> Node
-nodeConvert (XT.NodeElement e)     = NodeElement (elemConvert e)
-nodeConvert (XT.NodeInstruction i) = NodeInstruction i
-nodeConvert (XT.NodeContent c)     = NodeContent (contentToText c)
-nodeConvert (XT.NodeComment c)     = NodeComment c
-
-contentToText :: Content -> Text
-contentToText (ContentText c)   = c
-contentToText (ContentEntity c) = c
 
 writeToAllChannels
   :: MonadIO m => [TMChan a] -> a -> m ()
