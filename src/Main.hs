@@ -199,29 +199,120 @@ bindFeatures = features [NodeElement bind]
   where
     bind = Element bindName mempty []
 
+iqShort :: Text -> Text -> [Node] -> Element
+iqShort i t = Element "iq" attrs
+  where attrs = M.fromList [("id", i), ("type", t)]
+
 bind :: Text -> Element
 bind jid = Element bindName mempty [NodeElement bindElement]
   where
     bindElement = Element "jid" mempty [NodeContent jid]
 
+receiveIqBind :: MonadThrow m =>
+  (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
+receiveIqBind handler =
+  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
+
+bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
+  ChanMap ->
+  Text ->
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  ConduitT Event o m (Maybe r)
+bindHandler cm jid sink i t =
+  if t /= "set"
+  then error "type =/= set" -- TODO better error handling?
+  else tagIgnoreAttrs (matching (==bindName)) doBind
+  where
+    resourceName = Name "resource" (Just bindNamespace) Nothing
+    doBind = do
+      resource <- tagIgnoreAttrs (matching (==resourceName)) content
+
+      case resource of
+        Nothing -> error "bad resource" -- TODO replace this
+        Just resource -> do
+          let fullResource = jid <> "/" <> resource
+          let iqNodes      = [NodeElement (bind fullResource)]
+
+          liftIO $ putStrLn "Adding channel..."
+          createHandledChannel cm jid resource (forwardHandler sink)
+          yield (iqShort i "result" iqNodes) .| sink
+
+--------------------------------------------------
+-- Queries
+--------------------------------------------------
+
+infoNamespace :: Text
+infoNamespace = "http://jabber.org/protocol/disco#info"
+
+itemsNamespace :: Text
+itemsNamespace = "http://jabber.org/protocol/disco#items"
+
+iqName :: Name
+iqName = Name {nameLocalName = "iq", nameNamespace = Just "jabber:client", namePrefix = Nothing}
+
+testIqInfo :: BS.ByteString
+testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakespeare.lit' id='info1'> <query xmlns='http://jabber.org/protocol/disco#info'/> </iq>"
+
+iq :: Text -> Text -> Text -> Text -> [Node] -> Element
+iq i t to from = Element "iq" attrs
+  where attrs = M.fromList [("id", i), ("type", t), ("to", to), ("from", from)]
+
+receiveIq :: MonadThrow m =>
+  (Text -> Text -> Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
+receiveIq handler =
+  tag' (matching (==iqName)) ((,,,) <$>
+              requireAttr "id" <*>
+              requireAttr "type" <*>
+              requireAttr "to" <*>
+              requireAttr "from") $ uncurry4 handler
+  where
+    uncurry4 f (w, x, y, z) = f w x y z
+
+iqHandler :: (MonadThrow m, MonadIO m) =>
+  ChanMap ->
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m (Maybe r)
+iqHandler cm sink i t to from =
+  do
+    if t /= "get"
+      then error "type =/= get" -- TODO
+      else do
+      query <- tagNoAttr (matching (==infoQueryName)) content
+
+      case query of -- TODO how to refactor
+        Nothing -> do
+          query <- tagNoAttr (matching (==itemsQueryName)) content
+          case query of
+            Nothing -> return Nothing
+            Just q -> doItems
+        Just q -> doInfo
+  where
+    infoQueryName = Name "query" (Just infoNamespace) Nothing
+    itemsQueryName = Name "query" (Just itemsNamespace) Nothing
+    doInfo = do
+      r <- yield (iq i "result" from to [NodeElement (Element infoQueryName mempty [])]) .| sink
+      return $ Just r
+    doItems = do
+      r <- yield (iq i "result1" from to [NodeElement (Element itemsQueryName mempty [])]) .| sink
+      return $ Just r
+
 --------------------------------------------------
 -- OTHER STUFF
 --------------------------------------------------
 
--- TODO use IqStanza below?
-iq :: Text -> Text -> [Node] -> Element
-iq i t = Element "iq" attrs
-  where attrs = M.fromList [("id", i), ("type", t)]
-
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
   yield $ EventBeginElement streamName attrs
-  -- How come the client isn't sending us "from"? We need it to send "to"
   where attrs = [ at "from" from
                 , at "version" version
                 , at "id" (toText streamId)
-                , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang])
-                ]
+                , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang]) ]
         at name content = (Name name Nothing Nothing, [ContentText content])
         streamName = Name "stream"
                           (Just "http://etherx.jabber.org/streams")
@@ -261,14 +352,8 @@ data IqStanza = MkIq { iqId   :: Text
                      }
                 deriving (Eq, Show)
 
-
-receiveIq :: MonadThrow m =>
-  (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
-receiveIq handler =
-  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) $ uncurry handler
-
 receiveMessage handler =
-  tag' (matching (==msgname)) ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
+  tag' (matching (==msgName)) ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
 
 {-
 <message xmlns="jabber:client" from="test@localhost/gajim.CD9NEZ09" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" to="foo@localhost" type="chat">
@@ -350,7 +435,8 @@ skipToEnd name = do
     (Just e@(EventEndElement n)) -> if n == name then yield e else skipToEnd name
     _ -> skipToEnd name
 
-msgname = Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing}
+msgName :: Name
+msgName = Name {nameLocalName = "message", nameNamespace = Just "jabber:client", namePrefix = Nothing}
 
 testiq :: BS.ByteString
 testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
@@ -389,30 +475,6 @@ writeToAllChannels
   :: MonadIO m => [TMChan a] -> a -> m ()
 writeToAllChannels channels elem =
   forM_ channels $ \chan -> liftIO . atomically $ writeTMChan chan elem
-
-bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
-  ChanMap ->
-  Text ->
-  ConduitT Element o m r ->
-  Text ->
-  Text ->
-  ConduitT Event o m (Maybe r)
-bindHandler cm jid sink i _ =
-  tagIgnoreAttrs (matching (==bindName)) doBind
-  where
-    resourceName = Name "resource" (Just bindNamespace) Nothing
-    doBind = do
-      resource <- tagIgnoreAttrs (matching (==resourceName)) content
-
-      case resource of
-        Nothing -> error "bad resource" -- TODO replace this
-        Just resource -> do
-          let fullResource = jid <> "/" <> resource
-          let iqNodes      = [NodeElement (bind fullResource)]
-
-          liftIO $ putStrLn "Adding channel..."
-          createHandledChannel cm jid resource (forwardHandler sink)
-          yield (iq i "result" iqNodes) .| sink
 
 -- | Handler that forwards messages from a channel to a sink.
 forwardHandler :: (Show a, MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
@@ -496,12 +558,11 @@ handleClient' cm source sink bytesink = runConduit $ do
       fqdn <- asks fqdn
       let jid = userJid fqdn u
 
-      iqStanza <- source .| receiveIq (bindHandler cm jid sink)
-      liftIO $ print iqStanza
+      source .| receiveIqBind (bindHandler cm jid sink)
 
-      source .| ignoreAnyTreeContent
-      source .| ignoreAnyTreeContent
-      source .| ignoreAnyTreeContent
+      source .| receiveIq (iqHandler cm sink)
+      source .| receiveIq (iqHandler cm sink)
+      source .| receiveIq (iqHandler cm sink)
 
       messageLoop
 

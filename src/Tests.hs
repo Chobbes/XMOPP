@@ -94,7 +94,7 @@ tests = TestList
 
 -- Tests that require IO
 
-testSink :: MonadIO m => TMVar [a] -> ConduitT a o m ()
+testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
 testSink tv = do
   e <- consume
   liftIO $ atomically $ putTMVar tv e
