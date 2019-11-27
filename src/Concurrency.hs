@@ -92,7 +92,5 @@ forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
     Nothing   -> return ()
-    Just elem -> do
---      liftIO . putStrLn $ "Forwarding: " ++ show elem
-      runConduit $ yield elem .| void sink .| Conduit.sinkNull
+    Just elem -> runConduit $ yield elem .| void sink .| Conduit.sinkNull
   forwardHandler sink chan

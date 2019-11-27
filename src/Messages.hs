@@ -72,7 +72,7 @@ sendToJidAll cm to elem = do
       Nothing      -> return []
       Just (rs, m) -> forM rs $ \r -> do
         maybeChan <- STC.lookup r m
-        return (fromMaybe [] (fmap (:[]) maybeChan))
+        return $ maybeToList maybeChan
   liftIO $ putStrLn $ "Message to: " ++ show to
   liftIO $ print $ length channels
   writeToAllChannels (Prelude.concat channels) elem

@@ -1,57 +1,25 @@
-{-# LANGUAGE TupleSections              #-}
-{-# LANGUAGE EmptyDataDecls             #-}
-{-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE GADTs                      #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
-{-# LANGUAGE OverloadedStrings          #-}
-{-# LANGUAGE QuasiQuotes                #-}
-{-# LANGUAGE TemplateHaskell            #-}
-{-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE ScopedTypeVariables        #-}
-{-# LANGUAGE UndecidableInstances       #-}  -- Persistent :(?
--- {-# OPTIONS_GHC -fdefer-type-errors  #-}
+{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
+
+import Conduit
+import Data.Conduit
 
 import Data.Conduit.Network
 import Data.Conduit.Network.TLS
-import Data.Conduit
-import Control.Monad.IO.Class
-import Control.Monad.Trans.Class
-import Control.Monad.Catch
+
 import Data.Text (Text, unpack)
-import Data.Text.Encoding
-import qualified Data.Text as T
-import Data.XML.Types (Event(..), Content(..))
-import qualified Data.XML.Types as XT
+import qualified Data.ByteString as BS
+
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
-import qualified Text.XML.Stream.Render as XR
-import Data.Conduit.List as CL
-import Data.Char
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
-import Data.ByteString.Base64 (decodeLenient)
-import Data.Maybe
-import Data.UUID
-import System.Random
-import Control.Monad.Primitive
-import Data.Default
-import Control.Monad.Reader.Class
+import Data.XML.Types (Event(..), Content(..))
+
 import Control.Monad.Reader
-import Control.Monad.IO.Unlift
-import Control.Monad
-import Data.Conduit.TMChan
 import GHC.Conc (atomically, forkIO, STM)
-import Conduit
 import Control.Concurrent.STM.Map as STC
-import Control.Concurrent.STM.TMChan
-import Database.Persist
+
 import Database.Persist.Sqlite
-import qualified Data.Map as M
-import Control.Concurrent (ThreadId)
-import Control.Concurrent.Thread.Delay
-import Data.Hashable
 
 import Users
 import XMLRender
