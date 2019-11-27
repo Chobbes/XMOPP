@@ -279,10 +279,10 @@ messageHandler cm to from i ty = do
 
   -- Need to construct message element to send.
   let elem = Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("type", ty)])
-             [ NodeElement (Element "{jabber:client}body" mempty [NodeContent (fromJust body)])
+             [ NodeElement (Element "{jabber:client}body" mempty [NodeContent (fromMaybe (error "bad body") body)])
              , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
              , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
-             , NodeElement (Element "{jabber:client}thread" mempty [NodeContent (fromJust threadId)])
+             , NodeElement (Element "{jabber:client}thread" mempty [NodeContent (fromMaybe (error "bad body") threadId)])
              ]
 
   sendToJid cm to elem
@@ -475,24 +475,3 @@ xmpp cm (appData, stls) = do
   startTLS appData
   liftIO $ putStrLn "Starting TLS..."
   stls $ handleClient cm
-
-
---------------------------------------------------
--- Internal Server Communication
---------------------------------------------------
-
-eventConduitTest sink = do
-  chan <- liftIO newTMChanIO
---  streamId <- liftIO $ randomIO
-
-  let tmSource = sourceTMChan chan
-  let tmSink   = sinkTMChan chan
---  let docond = do v <- await; yield (fromJust v); liftIO $ print "test"; liftIO $ print v; docond
-
-  forkIO (runConduit $ tmSource .| renderElements .| sink)
---  forkIO $ chanToSink chan sink
-  forkIO (runConduit $ yield testElement .| tmSink)
-
-
-testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
-testDocument = Document emptyPrologue testElement []

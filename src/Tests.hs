@@ -135,3 +135,19 @@ testmsg2 = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42
 
 testmsg :: BS.ByteString
 testmsg = "<message xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
+
+eventConduitTest sink = do
+  chan <- liftIO newTMChanIO
+--  streamId <- liftIO $ randomIO
+
+  let tmSource = sourceTMChan chan
+  let tmSink   = sinkTMChan chan
+--  let docond = do v <- await; yield (fromJust v); liftIO $ print "test"; liftIO $ print v; docond
+
+  forkIO (runConduit $ tmSource .| renderElements .| sink)
+--  forkIO $ chanToSink chan sink
+  forkIO (runConduit $ yield testElement .| tmSink)
+
+
+testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
+testDocument = Document emptyPrologue testElement []
