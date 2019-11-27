@@ -65,19 +65,6 @@ import XMPP
 tlsNamespace :: Text
 tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
 
-{-
-  Need to lock sink until full messages are sent...
-
-  There's a couple problems.
-
-  If I have a stream I don't necessarily know when I have a full piece
-  of XML currently. Not sure when response is finished.
-
-  - Must always send full thing.
-
-  Locked right now :|
--}
-
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
 startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
@@ -235,7 +222,6 @@ bindHandler cm jid sink i t =
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
 
-          liftIO $ putStrLn "Adding channel..."
           createHandledChannel cm jid resource (forwardHandler sink)
           yield (iqShort i "result" iqNodes) .| sink
 
@@ -357,20 +343,24 @@ receiveMessage handler =
 
 messageHandler cm to from i ty = do
   -- Read message contents
+  elem <- choose [messageBody to from i ty]
+  maybe (return ()) (sendToJid cm to) elem
+
+messageBody to from i ty = do
   body <- tagIgnoreAttrs "{jabber:client}body" content
   ignoreAnyTreeContent  -- Ignore origin-id, already have information from it.
   ignoreAnyTreeContent  -- Also don't need any information from request tag.
   threadId <- tagIgnoreAttrs "{jabber:client}thread" content
 
-  -- Need to construct message element to send.
-  let elem = Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("type", ty)])
-             [ NodeElement (Element "{jabber:client}body" mempty [NodeContent (fromMaybe (error "bad body") body)])
-             , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
-             , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
-             , NodeElement (Element "{jabber:client}thread" mempty [NodeContent (fromMaybe (error "bad body") threadId)])
-             ]
+  let mkElem body threadId =
+        Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("type", ty)])
+        [ NodeElement (Element "{jabber:client}body" mempty [NodeContent body])
+        , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
+        , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
+        , NodeElement (Element "{jabber:client}thread" mempty [NodeContent threadId])
+        ]
 
-  sendToJid cm to elem
+  return (mkElem <$> body <*> threadId)
 
 -- | Look up channels associated with a given jid in the channel map, and send
 -- an element over that channel.
