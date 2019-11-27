@@ -18,6 +18,15 @@ import Control.Monad.STM
 import Control.Monad.IO.Class
 import Control.Monad.Reader.Class
 import Control.Monad.Reader
+import qualified Data.Map as M
+import Control.Concurrent.STM.TMChan
+import Data.XML.Types (Event(..), Content(..))
+import qualified Data.XML.Types as XT
+import Text.XML hiding (parseText)
+import Text.XML.Stream.Parse
+import qualified Text.XML.Stream.Render as XR
+import GHC.Conc (atomically, forkIO, STM)
+import Data.Conduit.TMChan
 
 import Main
 import XMPP
@@ -51,7 +60,7 @@ test_streamRespHeader =
   runST (runConduit $
           streamRespHeader "localhost" "en"
           (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
-          renderBytes def .|
+          XR.renderBytes def .|
           consume) ~?=
   [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
