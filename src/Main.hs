@@ -49,8 +49,6 @@ handleClient cm ad =
      handleClient' cm (appSource ad .| parseBytes def) sink (appSink ad)
 
 -- Separated for testing
---handleClient' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadUnliftIO m) =>
---  Map Text (ConduitT i Void m ()) -> ConduitT () Event m () -> ConduitT Event o m () -> m ()
 handleClient'
    :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, Show r) =>
    ChanMap ->
@@ -90,6 +88,7 @@ handleClient' cm source sink bytesink = runConduit $ do
     where messageLoop = do
             source .| receiveMessage (messageHandler cm)
             messageLoop
+
 --------------------------------------------------
 -- Main server
 --------------------------------------------------
@@ -105,6 +104,7 @@ main = do
   runReaderT (do port <- asks xmppPort
                  runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)) def
 
+-- | Main XMPP client handling.
 xmpp :: (PrimMonad m, MonadReader XMPPSettings m, MonadIO m, MonadUnliftIO m, MonadThrow m) =>
   ChanMap -> GeneralApplicationStartTLS m ()
 xmpp cm (appData, stls) = do
