@@ -2,8 +2,11 @@
 {-# LANGUAGE FlexibleContexts  #-}
 module Messages where
 
-import Control.Monad.IO.Class
+import Conduit
 import Data.Conduit.TMChan
+
+import Control.Monad.Catch
+import Control.Monad.IO.Class
 
 import GHC.Conc (atomically, forkIO, STM)
 import Control.Concurrent.STM.Map as STC
@@ -17,19 +20,35 @@ import Data.Maybe
 
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
+import Data.XML.Types (Event(..), Content(..))
 import qualified Text.XML.Stream.Render as XR
 
 import XMPP
 
-
+-- | Conduit to receive messages, and then forward them to a message handler.
+receiveMessage
+  :: MonadThrow m =>
+     (Text -> Text -> Text -> Text -> ConduitT Event o m c)
+     -> ConduitT Event o m (Maybe c)
 receiveMessage handler =
-  tag' "{jabber:client}message" ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
+  tag' "{jabber:client}message" attrs (\(t,f,i,ty) -> handler t f i ty)
+  where
+    attrs = (,,,) <$> requireAttr "to"
+            <*> requireAttr "from"
+            <*> requireAttr "id"
+            <*> requireAttr "type"
+            <* ignoreAttrs
 
+-- | Basic message handler. Collects messages, sends them to jid.
 messageHandler cm to from i ty = do
   -- Read message contents
   elem <- choose [messageBody to from i ty]
   maybe (return ()) (sendToJid cm to) elem
 
+-- | Parse a normal message with a body from an event stream.
+messageBody
+  :: MonadThrow m =>
+     Text -> Text -> Text -> Text -> ConduitT Event o m (Maybe Element)
 messageBody to from i ty = do
   body <- tagIgnoreAttrs "{jabber:client}body" content
   ignoreAnyTreeContent  -- Ignore origin-id, already have information from it.
@@ -77,6 +96,7 @@ sendToJidAll cm to elem = do
   liftIO $ print $ length channels
   writeToAllChannels (Prelude.concat channels) elem
 
+-- | Send message to a *specific* XMPP resource.
 sendToResource :: MonadIO m =>
      ChanMap -> Text -> Text -> Element -> m ()
 sendToResource cm jid resource elem = do
@@ -89,6 +109,7 @@ sendToResource cm jid resource elem = do
     Nothing   -> return ()
     Just chan -> liftIO . atomically $ writeTMChan chan elem
 
+-- | Write to a value to each channel in a list.
 writeToAllChannels
   :: MonadIO m => [TMChan a] -> a -> m ()
 writeToAllChannels channels elem =
