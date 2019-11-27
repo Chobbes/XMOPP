@@ -374,7 +374,7 @@ bindHandler cm jid sink i _ =
           yield (iq i "result" iqNodes) .| sink
 
 -- | Handler that forwards messages from a channel to a sink.
-forwardHandler :: (MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler :: (Show a, MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
 forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
