@@ -268,7 +268,7 @@ receiveIq handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) $ uncurry handler
 
 receiveMessage handler =
-  tag' (matching (==msgname)) ((\t f i -> (t,f,i)) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <* ignoreAttrs) (\(t,f,i) -> handler t f i)
+  tag' (matching (==msgname)) ((,,,) <$> requireAttr "to" <*> requireAttr "from" <*> requireAttr "id" <*> requireAttr "type" <* ignoreAttrs) (\(t,f,i,ty) -> handler t f i ty)
 
 {-
 <message xmlns="jabber:client" from="test@localhost/gajim.CD9NEZ09" id="6cb35763-f702-49c5-8dc1-2e03a0edc88b" to="foo@localhost" type="chat">
@@ -280,17 +280,17 @@ receiveMessage handler =
 -}
 
 
-messageHandler cm to from i = do
+messageHandler cm to from i ty = do
   liftIO . putStrLn $ "Message to: " ++ show to
 
   -- Read message contents
   body <- tagIgnoreAttrs "{jabber:client}body" content
   ignoreAnyTreeContent  -- Ignore origin-id, already have information from it.
-  ignoreAnyTreeContent
+  ignoreAnyTreeContent  -- Also don't need any information from request tag.
   threadId <- tagIgnoreAttrs "{jabber:client}thread" content
 
   -- Need to construct message element to send.
-  let elem = Element "{jabber:client}message" (M.fromList [("from", from), ("to", to)])
+  let elem = Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("type", ty)])
              [ NodeElement (Element "{jabber:client}body" mempty [NodeContent (fromJust body)])
              , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
              , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
@@ -301,10 +301,24 @@ messageHandler cm to from i = do
 
 -- | Look up channels associated with a given jid in the channel map, and send
 -- an element over that channel.
+--
+-- If the jid has a resource as well, only send to that specific resource.
 sendToJid
   :: MonadIO m =>
      ChanMap -> Text -> Element -> m ()
-sendToJid cm to elem = do
+sendToJid cm to elem =
+  case T.splitOn "/" to of
+    [jid]           -> sendToJidAll cm jid elem
+    [jid, resource] -> sendToResource cm jid resource elem
+    (jid:_)         -> sendToJidAll cm jid elem
+    _               -> return ()
+
+-- | Look up channels associated with a given jid in the channel map, and send
+-- an element over that channel.
+sendToJidAll
+  :: MonadIO m =>
+     ChanMap -> Text -> Element -> m ()
+sendToJidAll cm to elem = do
   channels <- liftIO . atomically $ do
     mm <- STC.lookup to cm
     case mm of
@@ -315,6 +329,18 @@ sendToJid cm to elem = do
   liftIO $ putStrLn $ "Message to: " ++ show to
   liftIO $ print $ length channels
   writeToAllChannels (Prelude.concat channels) elem
+
+sendToResource :: MonadIO m =>
+     ChanMap -> Text -> Text -> Element -> m ()
+sendToResource cm jid resource elem = do
+  mchan <- liftIO . atomically $ do
+    mm <- STC.lookup jid cm
+    case mm of
+      Nothing     -> return Nothing
+      Just (_, m) -> STC.lookup resource m
+  case mchan of
+    Nothing   -> return ()
+    Just chan -> liftIO . atomically $ writeTMChan chan elem
 
 skipToEnd :: Monad m => Name -> ConduitT Event Event m ()
 skipToEnd name = do
