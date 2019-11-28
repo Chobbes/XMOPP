@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {- Messaging within the server -}
 module InternalMessaging where
 

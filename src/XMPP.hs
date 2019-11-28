@@ -1,3 +1,4 @@
+{-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module XMPP where
@@ -12,6 +13,7 @@ import Control.Concurrent.STM.Map as STC
 
 import Control.Monad.Reader.Class
 import Control.Monad.Reader
+import Control.Monad.Logger
 
 import Data.Conduit
 import Data.Conduit.TMChan
@@ -34,5 +36,5 @@ data XMPPSettings =
 instance Default XMPPSettings where
   def = XMPPSettings "localhost" 5222 "xmpp.db"
 
-type XMPPMonad = ReaderT XMPPSettings IO
+type XMPPMonad = ReaderT XMPPSettings (LoggingT IO)
 type ChanMap = Map Text ([Text], Map Text (TMChan Element))
