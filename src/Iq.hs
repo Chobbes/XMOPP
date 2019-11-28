@@ -86,7 +86,7 @@ testIqInfo :: BS.ByteString
 testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakespeare.lit' id='info1'> <query xmlns='http://jabber.org/protocol/disco#info'/> </iq>"
 
 iq :: Text -> Text -> Text -> Text -> [Node] -> Element
-iq i t to from = Element "iq" attrs
+iq i t to from = Element iqName attrs
   where attrs = M.fromList [("id", i), ("type", t), ("to", to), ("from", from)]
 
 receiveIq :: MonadThrow m =>
@@ -110,28 +110,42 @@ iqHandler :: (MonadThrow m, MonadIO m) =>
   ConduitT Event o m (Maybe r)
 iqHandler cm sink i t to from =
   if t /= "get"
-  then error "type =/= get" -- TODO
+  then return Nothing
   else do
     query <- tagNoAttr (matching (==infoQueryName)) content
-
     case query of -- TODO how to refactor
+      Just q -> doInfo
       Nothing -> do
         query <- tagNoAttr (matching (==itemsQueryName)) content
         case query of
-          Nothing -> return Nothing
-          Just q -> doItems
-      Just q -> doInfo
+          Just q -> doError
+          Nothing -> doError
   where
-    infoQueryName = Name "query" (Just infoNamespace) Nothing
-    itemsQueryName = Name "query" (Just itemsNamespace) Nothing
+    infoQueryName = queryName infoNamespace
+    itemsQueryName = queryName itemsNamespace
     doInfo = do
-      r <- yield (iq i "result" from to [NodeElement (Element infoQueryName mempty [])]) .| sink
+      r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace])]) .| sink
       return $ Just r
-    doItems = do
-      r <- yield (iq i "result1" from to [NodeElement (Element itemsQueryName mempty [])]) .| sink
+    doItems = do -- TODO
+      r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
+      return $ Just r
+    doError = do
+      r <- yield (iq i "error" from to []) .| sink
       return $ Just r
 
+queryName :: Text -> Name
+queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
 
+query :: Text -> [Element] -> Element
+query namespace nodes = Element (queryName namespace) mempty $ NodeElement <$> nodes
+
+identity :: Text -> Text -> Text -> Element
+identity category t name = Element "identity" attrs []
+  where attrs = M.fromList [("category", category), ("type", t), ("name", name)]
+
+feature :: Text -> Element
+feature t = Element "feature" attrs []
+  where attrs = M.fromList [("var", t)]
 
 data IqStanza = MkIq { iqId   :: Text
                      , iqType :: Text
