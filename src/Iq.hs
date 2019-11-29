@@ -58,7 +58,7 @@ bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m, MonadLogg
   ConduitT Event o m (Maybe r)
 bindHandler cm jid sink i t =
   if t /= "set"
-  then error "bleh" -- logErrorN "type =/= set" >> return Nothing
+  then logErrorN "type =/= set" >> return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
     doBind = do
