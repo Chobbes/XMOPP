@@ -55,7 +55,6 @@ startTLS source sink = do
       -- Tell client to proceed
       logDebugN "Sending TLS proceed"
       yield proceed .| sink
-      error "asdf"
       logDebugN "Closing unencrypted channel."
 
 proceed :: Element
