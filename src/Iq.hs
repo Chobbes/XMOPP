@@ -45,9 +45,9 @@ bind jid = Element bindName mempty [NodeElement bindElement]
     bindElement = Element "jid" mempty [NodeContent jid]
 
 receiveIqBind :: MonadThrow m =>
-  (Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
+  (Text -> Text -> ConduitT Event o m (Maybe Text)) -> ConduitT Event o m (Maybe Text)
 receiveIqBind handler =
-  tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
+  join <$> (tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler)
 
 bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
   ChanMap ->
@@ -55,7 +55,7 @@ bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
   ConduitT Element o m r ->
   Text ->
   Text ->
-  ConduitT Event o m (Maybe r)
+  ConduitT Event o m (Maybe Text)
 bindHandler cm jid sink i t =
   if t /= "set"
   then logErrorN "type =/= set" >> return Nothing
@@ -73,7 +73,7 @@ bindHandler cm jid sink i t =
 
           createHandledChannel cm jid resource (forwardHandler sink)
           r <- yield (iqShort i "result" iqNodes) .| sink
-          return (Just r)
+          return (Just resource)
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"

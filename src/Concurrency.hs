@@ -22,7 +22,7 @@ import Control.Monad.Trans.Class
 import XMLRender
 import Text.XML
 
-import Data.Text
+import Data.Text hiding (filter, length)
 import qualified Data.ByteString as BS
 import UnliftIO.Concurrent (forkIO)
 
@@ -94,3 +94,19 @@ forwardHandler sink chan = do
     Nothing   -> return ()
     Just elem -> runConduit $ yield elem .| void sink .| Conduit.sinkNull
   forwardHandler sink chan
+
+-- | Free an XMPP resource from map.
+freeResource
+  :: (MonadIO m, Eq k, Eq a, Hashable k, Hashable a) =>
+     Map k ([a], Map a v) -> k -> a -> m ()
+freeResource cm jid resource =
+  liftIO . atomically $ do
+    mm <- STC.lookup jid cm
+    case mm of
+      Nothing      -> return ()
+      Just (xs, m) ->
+        if length xs == 1
+        then STC.delete jid cm
+        else do
+          STC.delete resource m
+          STC.insert jid (filter (/=resource) xs, m) cm

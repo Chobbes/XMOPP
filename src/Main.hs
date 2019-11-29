@@ -15,6 +15,7 @@ import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import Data.XML.Types (Event(..), Content(..))
 
+import Control.Monad.Catch
 import Control.Monad.Logger
 import Control.Monad.Reader
 import GHC.Conc (atomically, forkIO, STM)
@@ -79,13 +80,20 @@ handleClient' cm source sink bytesink = runConduit $ do
       fqdn <- asks fqdn
       let jid = userJid fqdn u
 
-      messageLoop jid
+      resource <- source .| receiveIqBind (bindHandler cm jid sink)
+
+      case resource of
+        Nothing       -> logDebugN $ "Could not bind resource for: " <> jid
+        Just resource -> do
+          messageLoop jid
+
+          -- Free channel. TODO: look into resourceT
+          freeResource cm jid resource
 
       logDebugN $ "End of stream for: " <> jid
     where messageLoop jid = do
             source .| choose [ receiveMessage (messageHandler cm)
                              , receiveIq (\i t to from -> void $ iqHandler cm sink i t to from)
-                             , receiveIqBind (\i t -> void $ bindHandler cm jid sink i t)
                              ]
             messageLoop jid
 
