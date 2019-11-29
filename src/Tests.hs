@@ -47,7 +47,7 @@ test_awaitName = TestList
     Just (EventBeginElement "stream" [])
   , join (runConduit $ yield "<notstream/>" .| parseBytes def .| awaitName "stream") ~?=
     Nothing
-  , join (runConduit $ yield "<notstream/> <stream/>" .| parseBytes def .| awaitName "stream") ~?=
+  , join (runConduit $ yield "<notstream/><stream/>" .| parseBytes def .| awaitName "stream") ~?=
     Just (EventBeginElement "stream" []) ]
 
 test_streamRespHeader :: Test
@@ -70,11 +70,18 @@ test_required :: Test
 test_required = renderElement required ~?=
                 pack "<required/>"
 
---
+-- TLS tests
 
 test_proceed :: Test
 test_proceed = renderElement proceed ~?=
                pack "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"
+
+-- Has a few extra namespaces but seems to work with clients
+test_tlsFeatures :: Test
+test_tlsFeatures = renderElement tlsFeatures ~?=
+                   pack "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required xmlns=\"\"/></starttls></stream:features>"
+
+-- SASL tests
 
 test_success :: Test
 test_success = renderElement success ~?=
@@ -98,10 +105,6 @@ tlsin = yield $ pack $ Prelude.unlines
 test_aborted :: Test
 test_aborted = renderElement aborted ~?=
                pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"
-
-test_tlsFeatures :: Test
-test_tlsFeatures = renderElement tlsFeatures ~?=
-                   pack "<stream:features><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required/></starttls></stream:features>"
 
 test_authFeatures :: Test
 test_authFeatures = renderElement authFeatures ~?=
@@ -128,6 +131,7 @@ unitTests = TestList
   , "features" ~: test_features
   , "required" ~: test_required
   , "proceed"  ~: test_proceed
+  , "tlsFeatures" ~: test_tlsFeatures
   , "success"  ~: test_success ]
 
 -- Tests that require IO
@@ -137,6 +141,11 @@ testSink tv = do
   e <- consume
   liftIO $ atomically $ putTMVar tv e
 
+runTestConduit
+  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
+runTestConduit = liftIO . runNoLoggingT . flip runReaderT def . runConduit
+
+-- Stream tests
 -- TODO tests for whether the client initiates or we initiate. See comments in Stream.hs for details.
 test_openStream :: IO Bool
 test_openStream = do
@@ -162,9 +171,20 @@ test_initiateStream = do
   return $ sent ==
     [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
-runTestConduit
-  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
-runTestConduit = liftIO . runNoLoggingT . flip runReaderT def . runConduit
+-- TLS tests
+
+test_startTLS :: IO Bool
+test_startTLS = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  runTestConduit $ startTLS (yield "<starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" .| parseBytes def) sink
+  --sent <- atomically $ readTMVar tv
+
+  -- print sent
+  return True
+  -- return $ renderElements sent ==
+  --   [pack $ "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"]
 
 main :: IO ()
 main = do

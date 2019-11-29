@@ -109,6 +109,6 @@ main = do
 xmpp ::
   ChanMap -> GeneralApplicationStartTLS XMPPMonad ()
 xmpp cm (appData, stls) = do
-  startTLS appData
+  startTLSIO appData
   logDebugN "Starting TLS..."
   stls $ handleClient cm
