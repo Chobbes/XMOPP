@@ -6,7 +6,7 @@ import Conduit
 import Data.Conduit
 import Data.Conduit.List
 import Data.Conduit.Network
-import Data.Text (Text)
+import Data.Text (Text, pack)
 import Data.Default
 import Control.Monad
 import Control.Monad.Catch
@@ -102,7 +102,7 @@ receiveIq handler =
   where
     uncurry4 f (w, x, y, z) = f w x y z
 
-iqHandler :: (MonadThrow m, MonadIO m) =>
+iqHandler :: (MonadThrow m, MonadLogger m) =>
   ChanMap ->
   ConduitT Element o m r ->
   Text ->
@@ -132,6 +132,8 @@ iqHandler cm sink i t to from =
       r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
       return $ Just r
     doError = do
+      let errorElem = iq i "error" from to []
+      logDebugN $ "IQ error: " <> pack (show errorElem)
       r <- yield (iq i "error" from to []) .| sink
       return $ Just r
 

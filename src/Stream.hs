@@ -10,6 +10,7 @@ import System.Random
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Reader
+import Control.Monad.Logger
 import Control.Monad.Primitive
 import Data.XML.Types (Event(..), Content(..))
 import Text.XML hiding (parseText)
@@ -44,26 +45,36 @@ streamRespHeader from lang streamId =
                           (Just "http://etherx.jabber.org/streams")
                           (Just "stream")
 
--- | Open a stream.
-openStream
-  :: (MonadThrow m, PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadIO m) =>
+-- | Open a stream with a random UUID
+openStreamIO
+  :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadLogger m, MonadIO m) =>
      ConduitT i Event m () ->
      ConduitT BS.ByteString o m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
      ConduitT i o m UUID
-openStream source sink = do
+openStreamIO source sink = do
+  streamId <- liftIO randomIO
+  openStream streamId source sink
+
+-- | Open a stream with a UUID.
+openStream
+  :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadLogger m) =>
+     UUID ->
+     ConduitT i Event m () ->
+     ConduitT BS.ByteString o m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
+     ConduitT i o m UUID
+openStream uuid source sink = do
   source .| awaitStream
-  liftIO $ putStrLn "Got connection stream thing..."
-  initiateStream sink
+  logDebugN "Got connection stream..."
+  initiateStream uuid sink
 
 -- | Generate a new initial stream header with a new UUID.
-initiateStream :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m) =>
-  ConduitT BS.ByteString o m r -> ConduitT i o m UUID
-initiateStream sink = do
-    streamId <- liftIO randomIO
+initiateStream :: (PrimMonad m, MonadReader XMPPSettings m, MonadLogger m) =>
+  UUID -> ConduitT BS.ByteString o m r -> ConduitT i o m UUID
+initiateStream streamId sink = do
     fqdn <- asks fqdn
-    liftIO $ putStrLn "Sending stream response..."
+    logDebugN "Sending stream response..."
     streamRespHeader fqdn "en" streamId .| XR.renderBytes def .| sink
-    liftIO $ putStrLn "Done..."
+    logDebugN "Done stream response..."
     return streamId
 
 features :: [Node] -> Element

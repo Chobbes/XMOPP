@@ -18,6 +18,7 @@ import Control.Monad.STM
 import Control.Monad.IO.Class
 import Control.Monad.Reader.Class
 import Control.Monad.Reader
+import Control.Monad.Logger
 import qualified Data.Map as M
 import Control.Concurrent.STM.TMChan
 import Data.XML.Types (Event(..), Content(..))
@@ -27,6 +28,7 @@ import Text.XML.Stream.Parse
 import qualified Text.XML.Stream.Render as XR
 import GHC.Conc (atomically, forkIO, STM)
 import Data.Conduit.TMChan
+import System.Random
 
 import Main
 import XMPP
@@ -35,6 +37,7 @@ import Stream
 import TLS
 import SASL
 import Iq
+import Logging
 
 test_required :: Test
 test_required = renderElement required ~?=
@@ -115,13 +118,18 @@ testSink tv = do
 test_initiateStream :: IO Bool
 test_initiateStream = do
   tv <- (newEmptyTMVarIO :: IO (TMVar [ByteString]))
-  let sink = testSink tv :: ConduitT BS.ByteString o (ReaderT XMPPSettings IO) ()
+  let sink = testSink tv -- :: ConduitT BS.ByteString o (ReaderT XMPPSettings IO) ()
 
-  uuid <- runReaderT (runConduit $ initiateStream sink) def
+  uuid <- randomIO
+  runTestConduit $ initiateStream uuid sink
   sent <- atomically $ readTMVar tv
 
   return $ sent ==
     [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ (show uuid) ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+
+runTestConduit
+  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
+runTestConduit = liftIO . runNoLoggingT . flip runReaderT def . runConduit
 
 main :: IO ()
 main = do

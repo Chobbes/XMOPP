@@ -37,6 +37,7 @@ import Logging
 -- XMPP Stanzas
 --------------------------------------------------
 
+-- | Construct a jid from an fqdn and a user.
 userJid :: Text -> User -> Text
 userJid fqdn u = userName u <> "@" <> fqdn
 
@@ -59,7 +60,7 @@ handleClient'
    ConduitT BS.ByteString Void m r ->
    m ()
 handleClient' cm source sink bytesink = runConduit $ do
-  streamid <- openStream source bytesink
+  streamid <- openStreamIO source bytesink
 
   -- Get user and pass
   auth <- plainAuth source sink
@@ -72,7 +73,7 @@ handleClient' cm source sink bytesink = runConduit $ do
       logDebugN $ "User authenticated: " <> (pack $ show auth)
 
       -- Restart stream and present bind feature.
-      openStream source bytesink
+      openStreamIO source bytesink
       yield bindFeatures .| sink
 
       fqdn <- asks fqdn
@@ -106,8 +107,6 @@ main = do
 
 -- | Main XMPP client handling.
 xmpp ::
-  -- (PrimMonad m, MonadReader XMPPSettings m, MonadIO m,
-  --  MonadUnliftIO m, MonadThrow m, MonadLogger m) =>
   ChanMap -> GeneralApplicationStartTLS XMPPMonad ()
 xmpp cm (appData, stls) = do
   startTLS appData

@@ -9,6 +9,7 @@ import Data.Default
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Reader
+import Control.Monad.Logger
 import Control.Monad.Primitive
 import Data.XML.Types (Event(..), Content(..))
 import Text.XML hiding (parseText)
@@ -24,29 +25,29 @@ tlsNamespace = "urn:ietf:params:xml:ns:xmpp-tls"
 
 -- | Handle the initial TLS stream negotiation from an XMPP client.
 -- TODO, modify this to be able to skip garbage that we don't handle.
-startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) => AppData -> m ()
+startTLS :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m, MonadLogger m) => AppData -> m ()
 startTLS ad = do
   (sink, chan) <- liftIO $ forkSink (appSink ad)
   startTLS' (appSource ad .| parseBytes def) sink (appSink ad)
 
-startTLS' :: (PrimMonad m, MonadIO m, MonadReader XMPPSettings m, MonadThrow m) =>
+startTLS' :: (PrimMonad m, MonadReader XMPPSettings m, MonadThrow m, MonadIO m, MonadLogger m) =>
   ConduitT () Event m () -> ConduitT Element Void m () -> ConduitT BS.ByteString Void m () -> m ()
 startTLS' source sink bytesink = runConduit $ do
   -- Use of bytesink is potentially dangerous, but should only be
   -- used before concurrency is an issue
-  openStream source bytesink
+  openStreamIO source bytesink
 
   -- Send StartTLS feature.
   yield tlsFeatures .| sink
 
   -- Wait for TLS request from client.
-  liftIO $ putStrLn "Awaiting TLS"
+  logDebugN "Awaiting TLS"
   starttls <- source .| awaitStartTls
 
   -- Tell client to proceed
-  liftIO $ putStrLn "Sending TLS proceed"
+  logDebugN "Sending TLS proceed"
   yield proceed .| sink
-  liftIO $ putStrLn "Closing unencrypted channel."
+  logDebugN "Closing unencrypted channel."
 
 proceed :: Element
 proceed = Element (Name "proceed" (Just tlsNamespace) Nothing) mempty []
