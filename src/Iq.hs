@@ -49,7 +49,7 @@ receiveIqBind :: MonadThrow m =>
 receiveIqBind handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m, MonadLogger m) =>
+bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
   ChanMap ->
   Text ->
   ConduitT Element o m r ->

@@ -18,8 +18,8 @@ import InternalMessaging
 -- | Conduit to receive messages, and then forward them to a message handler.
 receiveMessage
   :: MonadThrow m =>
-     (Text -> Text -> Text -> Text -> ConduitT Event o m c)
-     -> ConduitT Event o m (Maybe c)
+     (Text -> Text -> Text -> Text -> ConduitT Event o m r)
+     -> ConduitT Event o m (Maybe r)
 receiveMessage handler =
   tag' "{jabber:client}message" attrs (\(t,f,i,ty) -> handler t f i ty)
   where

@@ -78,18 +78,15 @@ handleClient' cm source sink bytesink = runConduit $ do
       fqdn <- asks fqdn
       let jid = userJid fqdn u
 
-      source .| receiveIqBind (bindHandler cm jid sink)
-
-      source .| receiveIq (iqHandler cm sink)
-      source .| receiveIq (iqHandler cm sink)
-      source .| receiveIq (iqHandler cm sink)
-
-      messageLoop
+      messageLoop jid
 
       logDebugN $ "End of stream for: " <> jid
-    where messageLoop = do
-            source .| receiveMessage (messageHandler cm)
-            messageLoop
+    where messageLoop jid = do
+            source .| choose [ receiveMessage (messageHandler cm)
+                             , receiveIq (\i t to from -> void $ iqHandler cm sink i t to from)
+                             , receiveIqBind (\i t -> void $ bindHandler cm jid sink i t)
+                             ]
+            messageLoop jid
 
 --------------------------------------------------
 -- Main server
