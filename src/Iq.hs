@@ -1,5 +1,5 @@
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE FlexibleContexts    #-}
 module Iq where
 
 import Conduit
@@ -11,6 +11,7 @@ import Data.Default
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Reader
+import Control.Monad.Logger
 import Control.Monad.Primitive
 import Control.Monad.IO.Unlift
 import Data.XML.Types (Event(..), Content(..))
@@ -48,7 +49,7 @@ receiveIqBind :: MonadThrow m =>
 receiveIqBind handler =
   tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler
 
-bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
+bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m, MonadLogger m) =>
   ChanMap ->
   Text ->
   ConduitT Element o m r ->
@@ -57,21 +58,22 @@ bindHandler :: (MonadThrow m, PrimMonad m, MonadIO m, MonadUnliftIO m) =>
   ConduitT Event o m (Maybe r)
 bindHandler cm jid sink i t =
   if t /= "set"
-  then error "type =/= set" -- TODO better error handling?
-  else tagIgnoreAttrs (matching (==bindName)) doBind
+  then error "bleh" -- logErrorN "type =/= set" >> return Nothing
+  else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
-    resourceName = Name "resource" (Just bindNamespace) Nothing
     doBind = do
-      resource <- tagIgnoreAttrs (matching (==resourceName)) content
+      let resourceName = "{urn:ietf:params:xml:ns:xmpp-bind}resource"
+      resource <- tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}resource" content
 
       case resource of
-        Nothing -> error "bad resource" -- TODO replace this
+        Nothing -> logErrorN ("Bad resource for " <> jid) >> return Nothing
         Just resource -> do
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]
 
           createHandledChannel cm jid resource (forwardHandler sink)
-          yield (iqShort i "result" iqNodes) .| sink
+          r <- yield (iqShort i "result" iqNodes) .| sink
+          return (Just r)
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
