@@ -139,7 +139,11 @@ unitTests = TestList
 testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
 testSink tv = do
   e <- consume
-  liftIO $ atomically $ putTMVar tv e
+  liftIO $ atomically $ do
+    e' <- tryTakeTMVar tv
+    case e' of
+      Nothing -> putTMVar tv e
+      Just e' -> putTMVar tv (e' ++ e)
 
 runTestConduit
   :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
@@ -179,12 +183,11 @@ test_startTLS = do
   let sink = testSink tv
 
   runTestConduit $ startTLS (yield "<starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" .| parseBytes def) sink
-  --sent <- atomically $ readTMVar tv
+  sent <- atomically $ readTMVar tv
 
-  -- print sent
-  return True
-  -- return $ renderElements sent ==
-  --   [pack $ "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>"]
+  return $ (renderElement <$> sent) ==
+     [ "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required xmlns=\"\"/></starttls></stream:features>"
+     , "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" ]
 
 main :: IO ()
 main = do
@@ -192,7 +195,8 @@ main = do
   runTests ioTests
   where
     ioTests = [ (test_initiateStream, "initiateStream")
-              , (test_openStream, "openStream") ]
+              , (test_openStream, "openStream")
+              , (test_startTLS, "startTLS") ]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do
