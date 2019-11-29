@@ -39,9 +39,38 @@ import SASL
 import Iq
 import Logging
 
+-- Stream module tests
+
+test_awaitName :: Test
+test_awaitName = TestList
+  [ join (runConduit $ yield "<stream/>" .| parseBytes def .| awaitName "stream") ~?=
+    Just (EventBeginElement "stream" [])
+  , join (runConduit $ yield "<notstream/>" .| parseBytes def .| awaitName "stream") ~?=
+    Nothing
+  , join (runConduit $ yield "<notstream/> <stream/>" .| parseBytes def .| awaitName "stream") ~?=
+    Just (EventBeginElement "stream" []) ]
+
+test_streamRespHeader :: Test
+test_streamRespHeader =
+  runST (runConduit $
+          streamRespHeader "localhost" "en"
+          (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
+          XR.renderBytes def .|
+          consume) ~?=
+  [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+
+test_features :: Test
+test_features = TestList
+  [ renderElement (features []) ~?=
+    pack "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"/>"
+  , renderElement (features [NodeElement required]) ~?=
+    pack "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><required/></stream:features>" ]
+
 test_required :: Test
 test_required = renderElement required ~?=
                 pack "<required/>"
+
+--
 
 test_proceed :: Test
 test_proceed = renderElement proceed ~?=
@@ -61,15 +90,6 @@ tlsin = yield $ pack $ Prelude.unlines
         , "xmlns='jabber:client'"
         , "xmlns:stream='http://etherx.jabber.org/streams'>"
         , "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" ]
-
-test_streamRespHeader :: Test
-test_streamRespHeader =
-  runST (runConduit $
-          streamRespHeader "localhost" "en"
-          (fromJust $ fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c") .|
-          XR.renderBytes def .|
-          consume) ~?=
-  [pack "<stream:stream from=\"localhost\" version=\"1.0\" id=\"c2cc10e1-57d6-4b6f-9899-38d972112d8c\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 -- The following tests don't pass.
 -- Some weirdness with tag, prefixes, and namespaces.
@@ -101,12 +121,14 @@ test_login_success = undefined
 test_login_fail :: Test
 test_login_fail = undefined
 
-tests :: Test
-tests = TestList
-  [ "required" ~: test_required
+unitTests :: Test
+unitTests = TestList
+  [ "awaitName" ~: test_awaitName
+  , "streamRespHeader" ~: test_streamRespHeader
+  , "features" ~: test_features
+  , "required" ~: test_required
   , "proceed"  ~: test_proceed
-  , "success"  ~: test_success
-  , "streamRespHeader" ~: test_streamRespHeader ]
+  , "success"  ~: test_success ]
 
 -- Tests that require IO
 
@@ -114,6 +136,19 @@ testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
 testSink tv = do
   e <- consume
   liftIO $ atomically $ putTMVar tv e
+
+-- TODO tests for whether the client initiates or we initiate. See comments in Stream.hs for details.
+test_openStream :: IO Bool
+test_openStream = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [ByteString]))
+  let sink = testSink tv
+
+  uuid <- randomIO
+  runTestConduit $ openStream uuid (yield "<anything/>" .| parseBytes def) sink
+  sent <- atomically $ readTMVar tv
+
+  return $ sent ==
+    [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 test_initiateStream :: IO Bool
 test_initiateStream = do
@@ -125,7 +160,7 @@ test_initiateStream = do
   sent <- atomically $ readTMVar tv
 
   return $ sent ==
-    [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ (show uuid) ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+    [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 runTestConduit
   :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
@@ -133,10 +168,11 @@ runTestConduit = liftIO . runNoLoggingT . flip runReaderT def . runConduit
 
 main :: IO ()
 main = do
-  runTestTT tests
+  runTestTT unitTests
   runTests ioTests
   where
-    ioTests = [ (test_initiateStream, "initiateStream") ]
+    ioTests = [ (test_initiateStream, "initiateStream")
+              , (test_openStream, "openStream") ]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do

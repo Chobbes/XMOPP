@@ -30,8 +30,11 @@ awaitName name = do
     Nothing -> return Nothing
     _ -> awaitName name
 
+streamName :: Name
+streamName = Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"}
+
 awaitStream :: MonadThrow m => ConduitT Event o m (Maybe Event)
-awaitStream = awaitName (Name {nameLocalName = "stream", nameNamespace = Just "http://etherx.jabber.org/streams", namePrefix = Just "stream"})
+awaitStream = awaitName streamName
 
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
@@ -41,10 +44,8 @@ streamRespHeader from lang streamId =
                 , at "id" (toText streamId)
                 , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang]) ]
         at name content = (Name name Nothing Nothing, [ContentText content])
-        streamName = Name "stream"
-                          (Just "http://etherx.jabber.org/streams")
-                          (Just "stream")
 
+-- TODO: right now we only handle clients opening the stream, since the message sent when opening the stream doesn't include the UUID. These functions handle replying to the client who sends the first message.
 -- | Open a stream with a random UUID
 openStreamIO
   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadLogger m, MonadIO m) =>
@@ -63,7 +64,7 @@ openStream
      ConduitT BS.ByteString o m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
      ConduitT i o m UUID
 openStream uuid source sink = do
-  source .| awaitStream
+  stream <- source .| awaitStream -- TODO check if stream == Nothing. Then maybe we can send a stream without a UUID?
   logDebugN "Got connection stream..."
   initiateStream uuid sink
 
