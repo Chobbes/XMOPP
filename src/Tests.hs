@@ -124,32 +124,30 @@ test_awaitAuth = TestList
   , join (runConduit $ yield "<notauth/>" .| parseBytes def .| awaitAuth) ~?=
     Nothing ]
 
+test_failure :: Test
+test_failure = TestList
+  [ renderElement (failure []) ~?=
+    pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
+  , renderElement (failure $ NodeElement <$> [proceed, proceed]) ~?=
+    pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></failure>" ]
+
+test_aborted :: Test
+test_aborted = renderElement aborted ~?=
+               pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted xmlns=\"\"/></failure>"
+
+test_notAuthorized :: Test
+test_notAuthorized = renderElement notAuthorized ~?=
+                     pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><not-authorized xmlns=\"\"/></failure>"
+
 test_success :: Test
 test_success = renderElement success ~?=
                pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
 
-tlsin :: Monad m => ConduitT i BS.ByteString m ()
-tlsin = yield $ pack $ Prelude.unlines
-        [ "<stream:stream"
-        , "from='juliet@im.example.com'"
-        , "to='im.example.com'"
-        , "version='1.0'"
-        , "xml:lang='en'"
-        , "xmlns='jabber:client'"
-        , "xmlns:stream='http://etherx.jabber.org/streams'>"
-        , "<starttls xmlns='urn:ietf:params:xml:ns:xmpp-tls'/>" ]
-
--- The following tests don't pass.
--- Some weirdness with tag, prefixes, and namespaces.
--- Doesn't match the spec, but seems to be ok for the client.
-
-test_aborted :: Test
-test_aborted = renderElement aborted ~?=
-               pack "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted/></failure>"
-
 test_authFeatures :: Test
 test_authFeatures = renderElement authFeatures ~?=
-                    pack "<stream:features><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism>PLAIN</mechanism></mechanisms></stream:features>"
+                    pack "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><mechanisms xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><mechanism xmlns=\"\">PLAIN</mechanism></mechanisms></stream:features>"
+
+-- Iq tests
 
 test_bindFeatures :: Test
 test_bindFeatures = renderElement bindFeatures ~?=
@@ -174,7 +172,11 @@ unitTests = TestList
   , "proceed"  ~: test_proceed
   , "tlsFeatures" ~: test_tlsFeatures
   , "awaitAuth" ~: test_awaitAuth
-  , "success"  ~: test_success ]
+  , "failure" ~: test_failure
+  , "aborted" ~: test_aborted
+  , "notAuthorized" ~: test_notAuthorized
+  , "success"  ~: test_success
+  , "authFeatures" ~: test_authFeatures ]
 
 -- Tests that require IO
 
