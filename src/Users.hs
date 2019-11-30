@@ -8,10 +8,13 @@
 
 module Users where
 
-import Data.Text
 import Database.Persist
 import Database.Persist.Sqlite
 import Database.Persist.TH
+
+import Data.Text
+import Control.Monad.Reader.Class
+import Control.Monad.Reader hiding (mapM_)
 
 -- Want plugins to be able to add state to users as well.
 -- Roster?
@@ -25,3 +28,11 @@ User
     UniqueName name
     deriving Show
 |]
+
+-- | Insert a list of users into the database.
+insertUsers
+  :: (PersistUniqueWrite backend, MonadIO m, Foldable t,
+      AtLeastOneUniqueKey record,
+      PersistEntityBackend record ~ BaseBackend backend) =>
+     t record -> ReaderT backend m ()
+insertUsers users = mapM_ insertBy users

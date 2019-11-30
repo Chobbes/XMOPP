@@ -1,5 +1,6 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE OverloadedStrings #-}
-
+{-# LANGUAGE TypeFamilies      #-}
 module Tests where
 
 import Test.HUnit
@@ -11,13 +12,15 @@ import qualified Data.ByteString as BS
 import Data.ByteString.Char8
 import Data.Conduit
 import Data.Default
-import Data.Conduit.List
+import Data.Conduit.List hiding (mapM_)
 import Data.Text (Text, unpack)
 import Control.Concurrent.STM.TMVar
+import Control.Monad
 import Control.Monad.STM
 import Control.Monad.IO.Class
+import Control.Monad.IO.Unlift
 import Control.Monad.Reader.Class
-import Control.Monad.Reader
+import Control.Monad.Reader hiding (mapM_)
 import Control.Monad.Logger
 import qualified Data.Map as M
 import Control.Concurrent.STM.TMChan
@@ -30,6 +33,9 @@ import GHC.Conc (atomically, forkIO, STM)
 import Data.Conduit.TMChan
 import System.Random
 
+import Database.Persist
+import Database.Persist.Sqlite
+
 import Main
 import XMPP
 import XMLRender
@@ -38,6 +44,31 @@ import TLS
 import SASL
 import Iq
 import Logging
+import Users
+
+
+--------------------------------------------------
+-- Test utilities / setup
+--------------------------------------------------
+
+-- | Default XMPPSettings for testing.
+--
+-- Sets things up to use an in memory database.
+testSettings :: XMPPSettings
+testSettings = def { xmppDB = ":memory:" }
+
+-- | List of test users.
+testUsers :: [User]
+testUsers = [ User "test1" "test1pass"
+            , User "test2" "test2pass"
+            ]
+
+-- | Set up DB with test users.
+testDBSetup
+  :: (MonadIO m, MonadReader XMPPSettings m) => Text -> m ()
+testDBSetup db = do
+  db <- asks xmppDB
+  liftIO . runSqlite db $ insertUsers testUsers
 
 -- Stream module tests
 
