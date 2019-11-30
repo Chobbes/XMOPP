@@ -23,6 +23,7 @@ import qualified Data.Map as M
 import XMPP
 import Stream
 import Concurrency
+import Utils
 
 -- Bind stanzas
 
@@ -127,6 +128,7 @@ iqHandler cm sink i t to from =
   then return Nothing
   else choose [ infoHandler sink i t to from content
               , itemsHandler sink i t to from content
+              , pingHandler sink i t to from content
               , queryError sink i t to from ]
 
 infoNamespace :: Text
@@ -144,7 +146,7 @@ infoHandler sink i t to from c = do
   q <- tagNoAttr (matching (==infoQueryName)) c
   case q of
     Just q -> do
-      r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace])]) .| sink
+      r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
       return $ Just r
     Nothing -> return Nothing
   where
@@ -170,6 +172,27 @@ itemsHandler sink i t to from c = do
     Nothing -> return Nothing
   where
     itemsQueryName = queryName itemsNamespace
+
+pingNamespace :: Text
+pingNamespace = "urn:xmpp:ping"
+
+pingHandler :: (MonadThrow m, MonadLogger m) =>
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m Text ->
+  ConduitT Event o m (Maybe r)
+pingHandler sink i t to from c = do
+  q <- tagNoAttr (matching (==pingName)) c
+  case q of
+    Just q -> do
+      r <- yield (iq i "result" from to []) .| sink
+      return $ Just r
+    Nothing -> return Nothing
+  where
+    pingName = Name "ping" (Just pingNamespace) Nothing
 
 queryError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Element o m r ->
