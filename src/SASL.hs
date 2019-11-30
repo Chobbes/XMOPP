@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts  #-}
+{-# LANGUAGE GADTs             #-}
 module SASL where
 
 import Data.Conduit
@@ -28,6 +29,16 @@ import Concurrency
 saslNamespace :: Text
 saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
 
+awaitAuth :: MonadThrow m => ConduitT Event o m (Maybe (Text, Text))
+awaitAuth = do
+  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content -- TODO check for mechanism='PLAIN'
+  return $ do
+    auth <- authStr
+    case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
+      [_, user, pass] -> return (user, pass)
+      _               -> Nothing
+
+
 -- | Get authentication information.
 plainAuth
   :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
@@ -38,23 +49,20 @@ plainAuth source sink = do
   yield authFeatures .| sink
   auth <- source .| awaitAuth
   case auth of
-    Just (user, pass) -> authenticate user pass
+    Just (user, pass) -> do
+      db <- asks xmppDB -- TODO move db to an argument for testing?
+      liftIO $ runSqlite ":memory:" $ authenticate user pass
     _ -> return Nothing
 
-authenticate
-  :: (MonadReader XMPPSettings m, MonadIO m) =>
-     Text -> Text -> m (Maybe User)
+authenticate :: (MonadIO m, PersistUniqueRead backend, BaseBackend backend ~ SqlBackend) =>
+  Text -> Text -> ReaderT backend m (Maybe User)
 authenticate user pass = do
-  db <- asks xmppDB
-  liftIO $ runSqlite db $ do
-    maybeUser <- getBy (UniqueName user)
-    return $
-      case maybeUser of
-        Just (Entity _ u) ->
-          if userPassword u == pass
-          then Just u
-          else Nothing
-        _ -> Nothing
+  maybeUser <- getBy (UniqueName user)
+  return $
+    case maybeUser of
+      Just (Entity _ u) ->
+        if userPassword u == pass then Just u else Nothing
+      _ -> Nothing
 
 failure :: [Node] -> Element
 failure = Element (Name "failure" (Just saslNamespace) Nothing) mempty
@@ -78,13 +86,4 @@ authFeatures = features [NodeElement mechanisms]
     mechanismsName = Name "mechanisms"
                           (Just saslNamespace)
                           Nothing
-    plain = Element (Name "mechanism" Nothing Nothing) mempty [NodeContent "PLAIN"]
-
-awaitAuth :: MonadThrow m => ConduitT Event o m (Maybe (Text, Text))
-awaitAuth = do
-  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content -- TODO check for mechanism='PLAIN'
-  return $ do
-    auth <- authStr
-    case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
-      [_, user, pass] -> return (user, pass)
-      _               -> Nothing
+    plain = Element "mechanism" mempty [NodeContent "PLAIN"]

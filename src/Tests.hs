@@ -29,10 +29,13 @@ import qualified Text.XML.Stream.Render as XR
 import GHC.Conc (atomically, forkIO, STM)
 import Data.Conduit.TMChan
 import System.Random
+import Database.Persist
+import Database.Persist.Sqlite
 
 import Main
 import XMPP
 import XMLRender
+import Users
 import Stream
 import TLS
 import SASL
@@ -83,6 +86,14 @@ test_tlsFeatures = renderElement tlsFeatures ~?=
 
 -- SASL tests
 
+-- TODO check PLAIN
+test_awaitAuth :: Test
+test_awaitAuth = TestList
+  [ join (runConduit $ yield "<auth xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\" mechanism=\"PLAIN\">AGdyYWluAGFzZGY=</auth>" .| parseBytes def .| awaitAuth) ~?=
+    Just ("grain", "asdf")
+  , join (runConduit $ yield "<notauth/>" .| parseBytes def .| awaitAuth) ~?=
+    Nothing ]
+
 test_success :: Test
 test_success = renderElement success ~?=
                pack "<success xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
@@ -132,6 +143,7 @@ unitTests = TestList
   , "required" ~: test_required
   , "proceed"  ~: test_proceed
   , "tlsFeatures" ~: test_tlsFeatures
+  , "awaitAuth" ~: test_awaitAuth
   , "success"  ~: test_success ]
 
 -- Tests that require IO
@@ -189,6 +201,24 @@ test_startTLS = do
      [ "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required xmlns=\"\"/></starttls></stream:features>"
      , "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" ]
 
+-- SASL tests
+
+test_authenticate1 :: MonadIO m => m Bool
+test_authenticate1 = liftIO $ runSqlite ":memory:" $ do
+  runMigrationSilent migrateAll
+  insert $ User "grain" "asdf"
+  u <- authenticate "grain" "asdf"
+  return $
+    u == (Just $ User "grain" "asdf")
+
+test_authenticate2 :: MonadIO m => m Bool
+test_authenticate2 = liftIO $ runSqlite ":memory:" $ do
+  runMigrationSilent migrateAll
+  insert $ User "grain" "1234"
+  u <- authenticate "grain" "asdf"
+  return $
+    u == Nothing
+
 main :: IO ()
 main = do
   runTestTT unitTests
@@ -196,7 +226,9 @@ main = do
   where
     ioTests = [ (test_initiateStream, "initiateStream")
               , (test_openStream, "openStream")
-              , (test_startTLS, "startTLS") ]
+              , (test_startTLS, "startTLS")
+              , (test_authenticate1, "authenticate 1")
+              , (test_authenticate2, "authenticate 2") ]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do

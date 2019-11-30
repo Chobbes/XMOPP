@@ -23,5 +23,5 @@ User
     name Text
     password Text
     UniqueName name
-    deriving Show
+    deriving Show Eq
 |]
