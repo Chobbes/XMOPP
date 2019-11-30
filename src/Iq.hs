@@ -69,7 +69,9 @@ bindHandler cm jid sink i t =
       resource <- tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}resource" content
 
       case resource of
-        Nothing -> logErrorN ("Bad resource for " <> jid) >> return Nothing
+        Nothing -> do
+          logErrorN $ "Bad resource for " <> jid
+          return Nothing
         Just resource -> do
           let fullResource = jid <> "/" <> resource
           let iqNodes      = [NodeElement (bind fullResource)]

@@ -38,7 +38,7 @@ import Database.Persist.Sqlite
 import Database.Persist
 import Database.Persist.Sqlite
 
-import Main
+import Main hiding (main)
 import XMPP
 import XMLRender
 import Users
@@ -151,11 +151,18 @@ test_authFeatures = renderElement authFeatures ~?=
 
 test_bindFeatures :: Test
 test_bindFeatures = renderElement bindFeatures ~?=
-                    pack "<stream:features><bind xmlns='urn:ietf:params:xml:ns:xmpp-bind'/></stream:features>"
+                    pack "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"/></stream:features>"
+
+test_iqShort :: Test
+test_iqShort = TestList
+  [ renderElement (iqShort "id" "type" []) ~?=
+    pack "<iq id=\"id\" type=\"type\"/>"
+  , renderElement (iqShort "i" "t" $ NodeElement <$> [proceed, proceed]) ~?=
+    pack "<iq id=\"i\" type=\"t\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></iq>" ]
 
 test_bind :: Test
 test_bind = renderElement (bind "test") ~?=
-            pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid>test</jid></bind>"
+            pack "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test</jid></bind>"
 
 test_login_success :: Test
 test_login_success = undefined
@@ -176,7 +183,10 @@ unitTests = TestList
   , "aborted" ~: test_aborted
   , "notAuthorized" ~: test_notAuthorized
   , "success"  ~: test_success
-  , "authFeatures" ~: test_authFeatures ]
+  , "authFeatures" ~: test_authFeatures
+  , "bindFeatures" ~: test_bindFeatures
+  , "iqShort" ~: test_iqShort
+  , "bind" ~: test_bind ]
 
 -- Tests that require IO
 
