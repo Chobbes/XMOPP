@@ -47,7 +47,6 @@ import TLS
 import SASL
 import Iq
 import Logging
-import Users
 
 
 --------------------------------------------------

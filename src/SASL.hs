@@ -51,7 +51,7 @@ plainAuth source sink = do
   case auth of
     Just (user, pass) -> do
       db <- asks xmppDB -- TODO move db to an argument for testing?
-      liftIO $ runSqlite ":memory:" $ authenticate user pass
+      liftIO $ runSqlite db $ authenticate user pass
     _ -> return Nothing
 
 authenticate :: (MonadIO m, PersistUniqueRead backend, BaseBackend backend ~ SqlBackend) =>
