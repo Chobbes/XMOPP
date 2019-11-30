@@ -24,6 +24,8 @@ import XMPP
 import Stream
 import Concurrency
 
+-- Bind stanzas
+
 bindNamespace :: Text
 bindNamespace = "urn:ietf:params:xml:ns:xmpp-bind"
 
@@ -75,11 +77,7 @@ bindHandler cm jid sink i t =
           r <- yield (iqShort i "result" iqNodes) .| sink
           return (Just resource)
 
-infoNamespace :: Text
-infoNamespace = "http://jabber.org/protocol/disco#info"
-
-itemsNamespace :: Text
-itemsNamespace = "http://jabber.org/protocol/disco#items"
+-- "Normal" Iq stanzas
 
 iqName :: Name
 iqName = Name {nameLocalName = "iq", nameNamespace = Just "jabber:client", namePrefix = Nothing}
@@ -90,6 +88,20 @@ testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakesp
 iq :: Text -> Text -> Text -> Text -> [Node] -> Element
 iq i t to from = Element iqName attrs
   where attrs = M.fromList [("id", i), ("type", t), ("to", to), ("from", from)]
+
+queryName :: Text -> Name
+queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
+
+query :: Text -> [Element] -> Element
+query namespace nodes = Element (queryName namespace) mempty $ NodeElement <$> nodes
+
+identity :: Text -> Text -> Text -> Element
+identity category t name = Element "identity" attrs []
+  where attrs = M.fromList [("category", category), ("type", t), ("name", name)]
+
+feature :: Text -> Element
+feature t = Element "feature" attrs []
+  where attrs = M.fromList [("var", t)]
 
 receiveIq :: MonadThrow m =>
   (Text -> Text -> Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
@@ -113,43 +125,66 @@ iqHandler :: (MonadThrow m, MonadLogger m) =>
 iqHandler cm sink i t to from =
   if t /= "get"
   then return Nothing
-  else do
-    query <- tagNoAttr (matching (==infoQueryName)) content
-    case query of -- TODO how to refactor
-      Just q -> doInfo
-      Nothing -> do
-        query <- tagNoAttr (matching (==itemsQueryName)) content
-        case query of
-          Just q -> doError
-          Nothing -> doError
-  where
-    infoQueryName = queryName infoNamespace
-    itemsQueryName = queryName itemsNamespace
-    doInfo = do
+  else choose [ infoHandler sink i t to from content
+              , itemsHandler sink i t to from content
+              , queryError sink i t to from ]
+
+infoNamespace :: Text
+infoNamespace = "http://jabber.org/protocol/disco#info"
+
+infoHandler :: (MonadThrow m, MonadLogger m) =>
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m Text ->
+  ConduitT Event o m (Maybe r)
+infoHandler sink i t to from content = do
+  q <- tagNoAttr (matching (==infoQueryName)) content
+  case q of
+    Just q -> do
       r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace])]) .| sink
       return $ Just r
-    doItems = do -- TODO
+    Nothing -> return Nothing
+  where
+    infoQueryName = queryName infoNamespace
+
+itemsNamespace :: Text
+itemsNamespace = "http://jabber.org/protocol/disco#items"
+
+itemsHandler :: (MonadThrow m, MonadLogger m) =>
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m Text ->
+  ConduitT Event o m (Maybe r)
+itemsHandler sink i t to from content = do
+  q <- tagNoAttr (matching (==itemsQueryName)) content
+  case q of
+    Just q -> do
       r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
       return $ Just r
-    doError = do
-      let errorElem = iq i "error" from to []
-      logDebugN $ "IQ error: " <> pack (show errorElem)
-      r <- yield (iq i "error" from to []) .| sink
-      return $ Just r
+    Nothing -> return Nothing
+  where
+    itemsQueryName = queryName itemsNamespace
 
-queryName :: Text -> Name
-queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
-
-query :: Text -> [Element] -> Element
-query namespace nodes = Element (queryName namespace) mempty $ NodeElement <$> nodes
-
-identity :: Text -> Text -> Text -> Element
-identity category t name = Element "identity" attrs []
-  where attrs = M.fromList [("category", category), ("type", t), ("name", name)]
-
-feature :: Text -> Element
-feature t = Element "feature" attrs []
-  where attrs = M.fromList [("var", t)]
+-- TODO: This currently throws an InvalidEndElement exception, not sure why
+queryError :: (MonadThrow m, MonadLogger m) =>
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m (Maybe r)
+queryError sink i t to from = do
+  logDebugN $ "IQ error: " <> pack (show errorElem)
+  r <- yield errorElem .| sink
+  return $ Just r
+  where
+    errorElem = iq i "error" from to [NodeElement (query itemsNamespace [])]
 
 data IqStanza = MkIq { iqId   :: Text
                      , iqType :: Text

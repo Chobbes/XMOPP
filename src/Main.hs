@@ -109,9 +109,9 @@ main = do
 
   -- Generate channel map.
   cm <- atomically empty
-  runStderrLoggingT $
-    flip runReaderT def $ do port <- asks xmppPort
-                             runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)
+  runStderrLoggingT $ flip runReaderT def $ do
+    port <- asks xmppPort
+    runTCPServerStartTLS (tlsConfig "*" port "cert.pem" "key.pem") (xmpp cm)
 
 -- | Main XMPP client handling.
 xmpp ::
