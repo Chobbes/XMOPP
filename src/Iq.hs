@@ -140,8 +140,8 @@ infoHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   ConduitT Event o m Text ->
   ConduitT Event o m (Maybe r)
-infoHandler sink i t to from content = do
-  q <- tagNoAttr (matching (==infoQueryName)) content
+infoHandler sink i t to from c = do
+  q <- tagNoAttr (matching (==infoQueryName)) c
   case q of
     Just q -> do
       r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace])]) .| sink
@@ -161,8 +161,8 @@ itemsHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   ConduitT Event o m Text ->
   ConduitT Event o m (Maybe r)
-itemsHandler sink i t to from content = do
-  q <- tagNoAttr (matching (==itemsQueryName)) content
+itemsHandler sink i t to from c = do
+  q <- tagNoAttr (matching (==itemsQueryName)) c
   case q of
     Just q -> do
       r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
@@ -171,7 +171,6 @@ itemsHandler sink i t to from content = do
   where
     itemsQueryName = queryName itemsNamespace
 
--- TODO: This currently throws an InvalidEndElement exception, not sure why
 queryError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Element o m r ->
   Text ->
@@ -180,11 +179,12 @@ queryError :: (MonadThrow m, MonadLogger m) =>
   Text ->
   ConduitT Event o m (Maybe r)
 queryError sink i t to from = do
+  ignoreAnyTreeContent
   logDebugN $ "IQ error: " <> pack (show errorElem)
   r <- yield errorElem .| sink
   return $ Just r
   where
-    errorElem = iq i "error" from to [NodeElement (query itemsNamespace [])]
+    errorElem = iq i "error" from to []
 
 data IqStanza = MkIq { iqId   :: Text
                      , iqType :: Text
