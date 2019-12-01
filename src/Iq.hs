@@ -146,18 +146,14 @@ infoHandler :: (MonadThrow m, MonadLogger m) =>
   ConduitT Event o m (Maybe r)
 infoHandler sink i t to from =
   if t /= "get"
-  then do
-    ignoreAnyTreeContent
-    return Nothing
+  then return Nothing
   else do
     q <- tagNoAttr (matching (==infoQueryName)) content
     case q of
       Just q -> do
         r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
         return $ Just r
-      Nothing -> do
-        ignoreAnyTreeContent
-        return Nothing
+      Nothing -> return Nothing
   where
     infoQueryName = queryName infoNamespace
 
@@ -173,18 +169,14 @@ itemsHandler :: (MonadThrow m, MonadLogger m) =>
   ConduitT Event o m (Maybe r)
 itemsHandler sink i t to from =
   if t /= "get"
-  then do
-    ignoreAnyTreeContent
-    return Nothing
+  then return Nothing
   else do
     q <- tagNoAttr (matching (==itemsQueryName)) content
     case q of
       Just q -> do
         r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
         return $ Just r
-      Nothing -> do
-        ignoreAnyTreeContent
-        return Nothing
+      Nothing -> return Nothing
   where
     itemsQueryName = queryName itemsNamespace
 
@@ -200,18 +192,14 @@ pingHandler :: (MonadThrow m, MonadLogger m) =>
   ConduitT Event o m (Maybe r)
 pingHandler sink i t to from =
   if t /= "get"
-  then do
-    ignoreAnyTreeContent
-    return Nothing
+  then return Nothing
   else do
     q <- tagNoAttr (matching (==pingName)) content
     case q of
       Just q -> do
         r <- yield (iq i "result" from to []) .| sink
         return $ Just r
-      Nothing -> do
-        ignoreAnyTreeContent
-        return Nothing
+      Nothing -> return Nothing
   where
     pingName = Name "ping" (Just pingNamespace) Nothing
 

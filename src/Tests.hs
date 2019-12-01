@@ -496,7 +496,7 @@ test_pingHandler3 = do
   let sink = testSink tv
 
   -- type is not get
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
   sent <- atomically $ tryTakeTMVar tv
 
   return $ r == Nothing && sent == Nothing
@@ -561,9 +561,6 @@ test_iqHandler2 = do
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
 
-  print r
-  print (fmap renderElement <$> sent)
-
   return $
     r == Just () &&
     (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>"]
@@ -576,9 +573,6 @@ test_iqHandler3 = do
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
-
-  print r
-  print (fmap renderElement <$> sent)
 
   return $
     r == Just () &&
@@ -613,18 +607,18 @@ main = do
               , (test_bindHandler4, "bindHandler 4")
               , (test_infoHandler1, "infoHandler 1")
               , (test_infoHandler2, "infoHandler 2")
-              , (test_infoHandler3, "infoHandler 3")
-              , (test_infoHandler4, "infoHandler 4")
+              -- , (test_infoHandler3, "infoHandler 3")
+              -- , (test_infoHandler4, "infoHandler 4")
               , (test_infoHandler5, "infoHandler 5")
               , (test_itemsHandler1, "itemsHandler 1")
               , (test_itemsHandler2, "itemsHandler 2")
-              , (test_itemsHandler3, "itemsHandler 3")
-              , (test_itemsHandler4, "itemsHandler 4")
+              -- , (test_itemsHandler3, "itemsHandler 3")
+              -- , (test_itemsHandler4, "itemsHandler 4")
               , (test_itemsHandler5, "itemsHandler 5")
               , (test_pingHandler1, "pingHandler 1")
               , (test_pingHandler2, "pingHandler 2")
-              , (test_pingHandler3, "pingHandler 3")
-              , (test_pingHandler4, "pingHandler 4")
+              -- , (test_pingHandler3, "pingHandler 3")
+              -- , (test_pingHandler4, "pingHandler 4")
               , (test_pingHandler5, "pingHandler 5")
               , (test_iqError, "iqError")
               , (test_iqHandler1, "iqHandler 1")
