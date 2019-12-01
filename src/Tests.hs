@@ -351,6 +351,252 @@ test_bindHandler4 = do
 
 -- Other Iq tests
 
+-- info
+
+test_infoHandler1 :: IO Bool
+test_infoHandler1 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing to attribute
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (infoHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_infoHandler2 :: IO Bool
+test_infoHandler2 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing query
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (infoHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_infoHandler3 :: IO Bool
+test_infoHandler3 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- type is not get
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (infoHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_infoHandler4 :: IO Bool
+test_infoHandler4 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- wrong query namespace
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (infoHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_infoHandler5 :: IO Bool
+test_infoHandler5 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (infoHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#info\"><identity category=\"cat\" name=\"name\" type=\"type\" xmlns=\"\"/><feature var=\"http://jabber.org/protocol/disco#info\" xmlns=\"\"/><feature var=\"urn:xmpp:ping\" xmlns=\"\"/></query></iq>"]
+
+-- items
+
+test_itemsHandler1 :: IO Bool
+test_itemsHandler1 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing to attribute
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (itemsHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_itemsHandler2 :: IO Bool
+test_itemsHandler2 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing query
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (itemsHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_itemsHandler3 :: IO Bool
+test_itemsHandler3 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- type is not get
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (itemsHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_itemsHandler4 :: IO Bool
+test_itemsHandler4 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (itemsHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_itemsHandler5 :: IO Bool
+test_itemsHandler5 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (itemsHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>"]
+
+-- ping
+
+test_pingHandler1 :: IO Bool
+test_pingHandler1 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing to attribute
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_pingHandler2 :: IO Bool
+test_pingHandler2 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- missing ping
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_pingHandler3 :: IO Bool
+test_pingHandler3 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  -- type is not get
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_pingHandler4 :: IO Bool
+test_pingHandler4 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"wrong\"/></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ r == Nothing && sent == Nothing
+
+test_pingHandler5 :: IO Bool
+test_pingHandler5 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (pingHandler sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"/>"]
+
+-- errors
+
+test_iqError :: IO Bool
+test_iqError = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (iqError sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"error\" xmlns=\"jabber:client\"/>"]
+
+-- combined iq handler
+
+test_iqHandler1 :: IO Bool
+test_iqHandler1 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  cm <- atomically STC.empty
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#info\"><identity category=\"cat\" name=\"name\" type=\"type\" xmlns=\"\"/><feature var=\"http://jabber.org/protocol/disco#info\" xmlns=\"\"/><feature var=\"urn:xmpp:ping\" xmlns=\"\"/></query></iq>"]
+
+test_iqHandler2 :: IO Bool
+test_iqHandler2 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  cm <- atomically STC.empty
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  print r
+  print (fmap renderElement <$> sent)
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>"]
+
+test_iqHandler3 :: IO Bool
+test_iqHandler3 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  cm <- atomically STC.empty
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  print r
+  print (fmap renderElement <$> sent)
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"/>"]
+
+test_iqHandler4 :: IO Bool
+test_iqHandler4 = do
+  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  let sink = testSink tv
+
+  cm <- atomically STC.empty
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"error\" xmlns=\"jabber:client\"/>"]
+
 main :: IO ()
 main = do
   runTestTT unitTests
@@ -364,12 +610,32 @@ main = do
               , (test_bindHandler1, "bindHandler 1")
               , (test_bindHandler2, "bindHandler 2")
               , (test_bindHandler3, "bindHandler 3")
-              , (test_bindHandler4, "bindHandler 4") ]
+              , (test_bindHandler4, "bindHandler 4")
+              , (test_infoHandler1, "infoHandler 1")
+              , (test_infoHandler2, "infoHandler 2")
+              , (test_infoHandler3, "infoHandler 3")
+              , (test_infoHandler4, "infoHandler 4")
+              , (test_infoHandler5, "infoHandler 5")
+              , (test_itemsHandler1, "itemsHandler 1")
+              , (test_itemsHandler2, "itemsHandler 2")
+              , (test_itemsHandler3, "itemsHandler 3")
+              , (test_itemsHandler4, "itemsHandler 4")
+              , (test_itemsHandler5, "itemsHandler 5")
+              , (test_pingHandler1, "pingHandler 1")
+              , (test_pingHandler2, "pingHandler 2")
+              , (test_pingHandler3, "pingHandler 3")
+              , (test_pingHandler4, "pingHandler 4")
+              , (test_pingHandler5, "pingHandler 5")
+              , (test_iqError, "iqError")
+              , (test_iqHandler1, "iqHandler 1")
+              , (test_iqHandler2, "iqHandler 2")
+              , (test_iqHandler3, "iqHandler 3")
+              , (test_iqHandler4, "iqHandler 4") ]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do
       result <- t
-      print $ name ++ (if result then " passed" else " failed")
+      print $ name ++ (if result then " passed" else " failed *******************")
       runTests ts
 
 --------------------------------------------------

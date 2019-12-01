@@ -52,6 +52,7 @@ bind jid = Element bindName mempty [NodeElement bindElement]
   where
     bindElement = Element "jid" mempty [NodeContent jid]
 
+-- Note that here the iq element must not have a namespace, unlike below
 receiveIqBind :: MonadThrow m =>
   (Text -> Text -> ConduitT Event o m (Maybe Text)) -> ConduitT Event o m (Maybe Text)
 receiveIqBind handler =
@@ -68,7 +69,7 @@ bindHandler cm jid sink i t =
   if t /= "set"
   then do
     logErrorN "Expected iq stanza with type = set for resource binding, but type =/= set."
-    ignoreAnyTreeContent -- TODO this is a hack
+    ignoreAnyTreeContent
     return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
@@ -107,15 +108,16 @@ feature t = Element "feature" attrs []
   where attrs = M.fromList [("var", t)]
 
 receiveIq :: MonadThrow m =>
-  (Text -> Text -> Text -> Text -> ConduitT Event o m r) -> ConduitT Event o m (Maybe r)
+  (Text -> Text -> Text -> Text -> ConduitT Event o m (Maybe r)) -> ConduitT Event o m (Maybe r)
 receiveIq handler =
-  tag' (matching (==iqName)) ((,,,) <$>
-              requireAttr "id" <*>
-              requireAttr "type" <*>
-              requireAttr "to" <*>
-              requireAttr "from") $ uncurry4 handler
+  join <$> tag' (matching (==iqName)) attrs (uncurry4 handler)
   where
     uncurry4 f (w, x, y, z) = f w x y z
+    attrs = (,,,) <$>
+            requireAttr "id" <*>
+            requireAttr "type" <*>
+            requireAttr "to" <*>
+            requireAttr "from"
 
 iqHandler :: (MonadThrow m, MonadLogger m) =>
   ChanMap ->
@@ -126,12 +128,11 @@ iqHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   ConduitT Event o m (Maybe r)
 iqHandler cm sink i t to from =
-  if t /= "get"
-  then return Nothing
-  else choose [ infoHandler sink i t to from content
-              , itemsHandler sink i t to from content
-              , pingHandler sink i t to from content
-              , queryError sink i t to from ]
+  choose $ (\f -> f sink i t to from) <$> [ infoHandler
+                                          , itemsHandler
+                                          , pingHandler
+                                          , iqError ]
+
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
@@ -142,15 +143,21 @@ infoHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   Text ->
-  ConduitT Event o m Text ->
   ConduitT Event o m (Maybe r)
-infoHandler sink i t to from c = do
-  q <- tagNoAttr (matching (==infoQueryName)) c
-  case q of
-    Just q -> do
-      r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
-      return $ Just r
-    Nothing -> return Nothing
+infoHandler sink i t to from =
+  if t /= "get"
+  then do
+    ignoreAnyTreeContent
+    return Nothing
+  else do
+    q <- tagNoAttr (matching (==infoQueryName)) content
+    case q of
+      Just q -> do
+        r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
+        return $ Just r
+      Nothing -> do
+        ignoreAnyTreeContent
+        return Nothing
   where
     infoQueryName = queryName infoNamespace
 
@@ -163,15 +170,21 @@ itemsHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   Text ->
-  ConduitT Event o m Text ->
   ConduitT Event o m (Maybe r)
-itemsHandler sink i t to from c = do
-  q <- tagNoAttr (matching (==itemsQueryName)) c
-  case q of
-    Just q -> do
-      r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
-      return $ Just r
-    Nothing -> return Nothing
+itemsHandler sink i t to from =
+  if t /= "get"
+  then do
+    ignoreAnyTreeContent
+    return Nothing
+  else do
+    q <- tagNoAttr (matching (==itemsQueryName)) content
+    case q of
+      Just q -> do
+        r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
+        return $ Just r
+      Nothing -> do
+        ignoreAnyTreeContent
+        return Nothing
   where
     itemsQueryName = queryName itemsNamespace
 
@@ -184,26 +197,32 @@ pingHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   Text ->
-  ConduitT Event o m Text ->
   ConduitT Event o m (Maybe r)
-pingHandler sink i t to from c = do
-  q <- tagNoAttr (matching (==pingName)) c
-  case q of
-    Just q -> do
-      r <- yield (iq i "result" from to []) .| sink
-      return $ Just r
-    Nothing -> return Nothing
+pingHandler sink i t to from =
+  if t /= "get"
+  then do
+    ignoreAnyTreeContent
+    return Nothing
+  else do
+    q <- tagNoAttr (matching (==pingName)) content
+    case q of
+      Just q -> do
+        r <- yield (iq i "result" from to []) .| sink
+        return $ Just r
+      Nothing -> do
+        ignoreAnyTreeContent
+        return Nothing
   where
     pingName = Name "ping" (Just pingNamespace) Nothing
 
-queryError :: (MonadThrow m, MonadLogger m) =>
+iqError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Element o m r ->
   Text ->
   Text ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-queryError sink i t to from = do
+iqError sink i t to from = do
   ignoreAnyTreeContent
   logDebugN $ "IQ error: " <> pack (show errorElem)
   r <- yield errorElem .| sink
