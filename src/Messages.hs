@@ -12,6 +12,8 @@ import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import Data.XML.Types (Event(..), Content(..))
 
+import Control.Monad.Logger
+
 import XMPP
 import InternalMessaging
 
@@ -30,6 +32,9 @@ receiveMessage handler =
             <* ignoreAttrs
 
 -- | Basic message handler. Collects messages, sends them to jid.
+messageHandler
+  :: (MonadThrow m, MonadIO m, MonadLogger m) =>
+     ChanMap -> Text -> Text -> Text -> Text -> ConduitT Event o m ()
 messageHandler cm to from i ty = do
   -- Read message contents
   elem <- choose [messageBody to from i ty]
@@ -46,7 +51,7 @@ messageBody to from i ty = do
   threadId <- tagIgnoreAttrs "{jabber:client}thread" content
 
   let mkElem body threadId =
-        Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("type", ty)])
+        Element "{jabber:client}message" (M.fromList [("from", from), ("to", to), ("id", i), ("type", ty)])
         [ NodeElement (Element "{jabber:client}body" mempty [NodeContent body])
         , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", i)]) [])
         , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])

@@ -60,8 +60,6 @@ tmSink handler = do
   forkIO $ handler tmSource
   return (tmSink, chan)
 
--- TODO: Need a way for channels to remove themselves???
--- Probably on end of stream...
 allocateChannel
   :: (MonadIO m, Eq k1, Hashable k1, Eq k2, Hashable k2) =>
      Map k1 ([k2], Map k2 (TMChan a)) -> k1 -> k2 -> m (TMChan a)

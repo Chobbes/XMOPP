@@ -12,7 +12,10 @@ import qualified Data.Text as T
 import Data.Text (Text, unpack)
 
 import Control.Monad
+import Control.Monad.Logger
+
 import Data.Maybe
+import Data.Hashable
 
 import Text.XML hiding (parseText)
 
@@ -23,7 +26,7 @@ import XMPP
 --
 -- If the jid has a resource as well, only send to that specific resource.
 sendToJid
-  :: MonadIO m =>
+  :: (MonadIO m, MonadLogger m) =>
      ChanMap -> Text -> Element -> m ()
 sendToJid cm to elem =
   case T.splitOn "/" to of
@@ -35,19 +38,12 @@ sendToJid cm to elem =
 -- | Look up channels associated with a given jid in the channel map, and send
 -- an element over that channel.
 sendToJidAll
-  :: MonadIO m =>
+  :: (MonadIO m, MonadLogger m) =>
      ChanMap -> Text -> Element -> m ()
 sendToJidAll cm to elem = do
-  channels <- liftIO . atomically $ do
-    mm <- STC.lookup to cm
-    case mm of
-      Nothing      -> return []
-      Just (rs, m) -> forM rs $ \r -> do
-        maybeChan <- STC.lookup r m
-        return $ maybeToList maybeChan
-  liftIO $ putStrLn $ "Message to: " ++ show to
-  liftIO $ print $ length channels
-  writeToAllChannels (Prelude.concat channels) elem
+  channels <- liftIO . atomically $ getJidChannels cm to
+  logDebugN $ "Message to: " <> to
+  writeToAllChannels channels elem
 
 -- | Send message to a *specific* XMPP resource.
 sendToResource :: MonadIO m =>
@@ -62,8 +58,26 @@ sendToResource cm jid resource elem = do
     Nothing   -> return ()
     Just chan -> liftIO . atomically $ writeTMChan chan elem
 
+-- | Get channels associated with a jid
+getJidChannels
+  :: (Eq k1, Eq k2, Hashable k1, Hashable k2) =>
+     Map k1 ([k2], Map k2 a) -> k1 -> STM [a]
+getJidChannels cm jid = do
+  mm <- STC.lookup jid cm
+  chans <- case mm of
+             Nothing      -> return []
+             Just (rs, m) -> forM rs $ \r -> do
+               maybeChan <- STC.lookup r m
+               return $ maybeToList maybeChan
+  return $ Prelude.concat chans
+
 -- | Write to a value to each channel in a list.
 writeToAllChannels
   :: MonadIO m => [TMChan a] -> a -> m ()
 writeToAllChannels channels elem =
   forM_ channels $ \chan -> liftIO . atomically $ writeTMChan chan elem
+
+-- | Read a value from each channel in a list.
+readAllChannels
+  :: Traversable t => t (TMChan a) -> STM (t (Maybe a))
+readAllChannels = mapM readTMChan

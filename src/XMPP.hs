@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
@@ -18,6 +19,9 @@ import Control.Monad.Logger
 import Data.Conduit
 import Data.Conduit.TMChan
 import Text.XML
+
+import Database.Persist
+import Database.Persist.Sqlite
 
 --------------------------------------------------
 -- Global XMPP settings

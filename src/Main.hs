@@ -71,7 +71,7 @@ handleClient' cm source sink bytesink = runConduit $ do
       logErrorN "Authentication failed."
     Just u  -> do
       yield success .| sink
-      logDebugN $ "User authenticated: " <> (pack $ show auth)
+      logDebugN $ "User authenticated: " <> pack (show auth)
 
       -- Restart stream and present bind feature.
       openStreamIO source bytesink

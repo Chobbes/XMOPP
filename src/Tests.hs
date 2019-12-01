@@ -13,10 +13,11 @@ import Data.ByteString.Char8
 import Data.Conduit
 import Data.Default
 import Data.Conduit.List hiding (mapM_)
-import Data.Text (Text, unpack)
+import Data.Text as T (Text, unpack)
 import Control.Concurrent.STM.TMVar
 import Control.Monad
 import Control.Monad.STM
+import Control.Monad.Catch hiding (catch)
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.Reader.Class
@@ -29,14 +30,17 @@ import qualified Data.XML.Types as XT
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Text.XML.Stream.Render as XR
+import Text.XML.Unresolved
 import GHC.Conc (atomically, forkIO, STM)
 import Data.Conduit.TMChan
 import System.Random
 import Database.Persist
 import Database.Persist.Sqlite
-
-import Database.Persist
-import Database.Persist.Sqlite
+import System.Directory
+import Control.Exception
+import System.IO.Error
+import Control.Concurrent.STM.Map hiding (insert)
+import qualified Control.Concurrent.STM.Map as STC
 
 import Main hiding (main)
 import XMPP
@@ -47,6 +51,9 @@ import TLS
 import SASL
 import Iq
 import Logging
+import Messages
+import InternalMessaging
+import Concurrency
 
 
 --------------------------------------------------
@@ -57,13 +64,40 @@ import Logging
 --
 -- Sets things up to use an in memory database.
 testSettings :: XMPPSettings
-testSettings = def { xmppDB = ":memory:" }
+testSettings = def { xmppDB = "tests.db" }
 
 -- | List of test users.
 testUsers :: [User]
-testUsers = [ User "test1" "test1pass"
-            , User "test2" "test2pass"
+testUsers = [ testUser1
+            , testUser2
             ]
+
+testUser1 :: User
+testUser1 = User "test1" "test1pass"
+
+testUser2 :: User
+testUser2 = User "test2" "test2pass"
+
+testResources :: [[Text]]
+testResources = [ ["u1r1", "u1r2"]
+                , ["u2r1"]
+                ]
+
+testUserResources :: [(User, [Text])]
+testUserResources = Prelude.zip testUsers testResources
+
+-- | Set up a bogus ChanMap with test users.
+-- Given a list of (User, [Resource]) pairs.
+testChanMapSetup :: MonadIO m => [(User, [Text])] -> m ChanMap
+testChanMapSetup users = do
+  m <- liftIO . atomically $ STC.empty
+  forM_ users $ \(user, resources) ->
+    forM_ resources $ \r ->
+      allocateChannel m (userName user) r
+  return m
+
+testChanMap :: MonadIO m => m ChanMap
+testChanMap = testChanMapSetup testUserResources
 
 -- | Set up DB with test users.
 testDBSetup
@@ -71,6 +105,104 @@ testDBSetup
 testDBSetup db = do
   db <- asks xmppDB
   liftIO . runSqlite db $ insertUsers testUsers
+
+-- | Remove a file unconditionally.
+removeFileUncond :: FilePath -> IO ()
+removeFileUncond name = removeFile name `catch` handleExcept
+  where handleExcept e
+          | isDoesNotExistError e = return ()
+          | otherwise = throwIO e
+
+-- | TODO: unfinished
+runWithTestDB :: (MonadIO m, MonadReader XMPPSettings m) => m ()
+runWithTestDB = do
+  db <- asks xmppDB
+  liftIO $ runSqlite (xmppDB def) $ runMigration migrateAll
+
+testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
+testSink tv = do
+  e <- consume
+  liftIO $ atomically $ do
+    e' <- tryTakeTMVar tv
+    case e' of
+      Nothing -> putTMVar tv e
+      Just e' -> putTMVar tv (e' ++ e)
+
+runTestConduit
+  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
+runTestConduit = liftIO . runNoLoggingT . flip runReaderT testSettings . runConduit
+
+
+--------------------------------------------------
+-- Test messaging
+--------------------------------------------------
+testmsg :: BS.ByteString
+testmsg = "<message xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
+
+testmsgbroken :: BS.ByteString
+testmsgbroken = "<messag xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
+
+testmsgElem :: Element
+testmsgElem = createMessage "foo@localhost"
+              "test@localhost/gajim.CD9NEZ09"
+              "blah"
+              (fromJust (fromString "c2cc10e1-57d6-4b6f-9899-38d972112d8c"))
+
+-- | Test that the receive message function only parses messages.
+testReceiveMessage :: Test
+testReceiveMessage = TestList
+  [ receiveGood ~?= Just testmsgElem
+  , receiveBad  ~?= Nothing
+  , receiveBad2 ~?= Nothing
+  ]
+  where
+    receiveGood = aux $ renderElement testmsgElem
+    receiveBad  = aux testmsgbroken
+    receiveBad2 = aux "<a></a>"
+
+    aux msg = join . join $
+      runConduit $ (yield msg .| parseBytes def .| receiveMessage messageBody)
+
+-- | Create a message with UUID.
+createMessage :: Text -> Text -> Text -> UUID -> Element
+createMessage to from body uuid =
+  Element "{jabber:client}message"
+          (M.fromList [ ("from",from)
+                      , ("to",to)
+                      , ("type","chat")
+                      , ("id", toText uuid)])
+          [ NodeElement (Element "{jabber:client}body" mempty [NodeContent body])
+          , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", toText uuid)]) [])
+          , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
+          , NodeElement (Element "{jabber:client}thread" mempty [NodeContent "testThreadId"])
+          ]
+
+-- | Test sending message from one user to another.
+-- Currently this is locking. Not sure why.
+testMessaging :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) => m Bool
+testMessaging = do
+  cm <- testChanMap
+  dn <- asks fqdn
+
+  let to = userJid dn testUser2
+  let from = userJid dn testUser1
+  uuid <- liftIO randomIO
+
+  let msg = createMessage to from "yohoo" uuid
+  runConduit $ sourceList (elementToEvents (toXMLElement msg)) .| receiveMessage (messageHandler cm)
+
+  -- Fetch message
+  liftIO $ Prelude.putStrLn "oh dear"
+  channels <- liftIO . atomically $ getJidChannels cm (userName testUser2)
+  liftIO $ Prelude.putStrLn "got channels"
+  elems <- liftIO . atomically $ readAllChannels channels
+  return $ Prelude.all (==Just msg) elems
+
+-- | Fetch all (maybe) messages for a user.
+lookupUserMessages :: ChanMap -> User -> STM [Maybe Element]
+lookupUserMessages cm user = do
+  channels <- getJidChannels cm (userName user)
+  readAllChannels channels
 
 -- Stream module tests
 
@@ -172,36 +304,25 @@ test_login_fail = undefined
 
 unitTests :: Test
 unitTests = TestList
-  [ "awaitName" ~: test_awaitName
+  [ "awaitName"        ~: test_awaitName
   , "streamRespHeader" ~: test_streamRespHeader
-  , "features" ~: test_features
-  , "required" ~: test_required
-  , "proceed"  ~: test_proceed
-  , "tlsFeatures" ~: test_tlsFeatures
-  , "awaitAuth" ~: test_awaitAuth
-  , "failure" ~: test_failure
-  , "aborted" ~: test_aborted
-  , "notAuthorized" ~: test_notAuthorized
-  , "success"  ~: test_success
-  , "authFeatures" ~: test_authFeatures
-  , "bindFeatures" ~: test_bindFeatures
-  , "iqShort" ~: test_iqShort
-  , "bind" ~: test_bind ]
+  , "features"         ~: test_features
+  , "required"         ~: test_required
+  , "proceed"          ~: test_proceed
+  , "tlsFeatures"      ~: test_tlsFeatures
+  , "awaitAuth"        ~: test_awaitAuth
+  , "failure"          ~: test_failure
+  , "aborted"          ~: test_aborted
+  , "notAuthorized"    ~: test_notAuthorized
+  , "success"          ~: test_success
+  , "authFeatures"     ~: test_authFeatures
+  , "bindFeatures"     ~: test_bindFeatures
+  , "iqShort"          ~: test_iqShort
+  , "bind"             ~: test_bind
+  , "receiveMessage"   ~: testReceiveMessage
+  ]
 
 -- Tests that require IO
-
-testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
-testSink tv = do
-  e <- consume
-  liftIO $ atomically $ do
-    e' <- tryTakeTMVar tv
-    case e' of
-      Nothing -> putTMVar tv e
-      Just e' -> putTMVar tv (e' ++ e)
-
-runTestConduit
-  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
-runTestConduit = liftIO . runNoLoggingT . flip runReaderT def . runConduit
 
 -- Stream tests
 -- TODO tests for whether the client initiates or we initiate. See comments in Stream.hs for details.
@@ -270,7 +391,7 @@ main = do
               , (test_openStream, "openStream")
               , (test_startTLS, "startTLS")
               , (test_authenticate1, "authenticate 1")
-              , (test_authenticate2, "authenticate 2") ]
+              , (test_authenticate2, "authenticate 2")]
 
     runTests [] = return ()
     runTests ((t, name):ts) = do
@@ -287,9 +408,6 @@ testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xml
 
 testmsg2 :: BS.ByteString
 testmsg2 = "<message xmlns=\"jabber:client\" from=\"test\" id=\"0f41469e-55fe-42c8-88a2-997e592ef16d\" to=\"foo@localhost\" type=\"chat\">ahhhhh</message>"
-
-testmsg :: BS.ByteString
-testmsg = "<message xmlns=\"jabber:client\" from=\"test@localhost/gajim.CD9NEZ09\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" to=\"foo@localhost\" type=\"chat\"><body>eoaueoa</body><origin-id xmlns=\"urn:xmpp:sid:0\" id=\"615a1f64-0d8a-44c1-8bfd-52b2fa5622dd\" /><request xmlns=\"urn:xmpp:receipts\" /><thread>MrwqjWfrzhgjYOPHfuQwOjgWuSTHWIcM</thread></message>"
 
 eventConduitTest sink = do
   chan <- liftIO newTMChanIO
