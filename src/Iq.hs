@@ -3,11 +3,13 @@
 module Iq where
 
 import Conduit
+import Data.UUID
 import Data.Conduit
 import Data.Conduit.List
 import Data.Conduit.Network
 import Data.Text (Text, pack)
 import Data.Default
+import System.Random
 import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Reader
@@ -61,24 +63,24 @@ bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
   ConduitT Event o m (Maybe Text)
 bindHandler cm jid sink i t =
   if t /= "set"
-  then logErrorN "type =/= set" >> return Nothing
+  then do
+    logErrorN "Expected iq stanza with type = set for resource binding, but type =/= set."
+    return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
     doBind = do
-      let resourceName = "{urn:ietf:params:xml:ns:xmpp-bind}resource"
-      resource <- tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}resource" content
+      r <- tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}resource" content
+      uuid <- liftIO (randomIO :: IO UUID)
 
-      case resource of
-        Nothing -> do
-          logErrorN $ "Bad resource for " <> jid
-          return Nothing
-        Just resource -> do
-          let fullResource = jid <> "/" <> resource
-          let iqNodes      = [NodeElement (bind fullResource)]
+      let resource = case r of
+                       Nothing -> pack $ show uuid
+                       Just r -> r
+      let fullResource = jid <> "/" <> resource
+      let iqNodes      = [NodeElement (bind fullResource)]
 
-          createHandledChannel cm jid resource (forwardHandler sink)
-          r <- yield (iqShort i "result" iqNodes) .| sink
-          return (Just resource)
+      createHandledChannel cm jid resource (forwardHandler sink)
+      yield (iqShort i "result" iqNodes) .| sink
+      return (Just resource)
 
 -- "Normal" Iq stanzas
 
