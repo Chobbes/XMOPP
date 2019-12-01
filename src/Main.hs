@@ -93,7 +93,7 @@ handleClient' cm source sink bytesink = runConduit $ do
       logDebugN $ "End of stream for: " <> jid
     where messageLoop jid = do
             source .| choose [ receiveMessage (messageHandler cm)
-                             , receiveIq (\i t to from -> void $ iqHandler cm sink i t to from)
+                             , receiveIq (iqHandler cm (void sink))
                              ]
             messageLoop jid
 
