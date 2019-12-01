@@ -40,8 +40,11 @@ bindFeatures = features [NodeElement bind]
   where
     bind = Element bindName mempty []
 
+iqName :: Name
+iqName = Name {nameLocalName = "iq", nameNamespace = Just "jabber:client", namePrefix = Nothing}
+
 iqShort :: Text -> Text -> [Node] -> Element
-iqShort i t = Element "iq" attrs
+iqShort i t = Element iqName attrs
   where attrs = M.fromList [("id", i), ("type", t)]
 
 bind :: Text -> Element
@@ -65,6 +68,7 @@ bindHandler cm jid sink i t =
   if t /= "set"
   then do
     logErrorN "Expected iq stanza with type = set for resource binding, but type =/= set."
+    ignoreAnyTreeContent -- TODO this is a hack
     return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
@@ -84,12 +88,6 @@ bindHandler cm jid sink i t =
 
 -- "Normal" Iq stanzas
 
-iqName :: Name
-iqName = Name {nameLocalName = "iq", nameNamespace = Just "jabber:client", namePrefix = Nothing}
-
-testIqInfo :: BS.ByteString
-testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakespeare.lit' id='info1'> <query xmlns='http://jabber.org/protocol/disco#info'/> </iq>"
-
 iq :: Text -> Text -> Text -> Text -> [Node] -> Element
 iq i t to from = Element iqName attrs
   where attrs = M.fromList [("id", i), ("type", t), ("to", to), ("from", from)]
@@ -97,8 +95,8 @@ iq i t to from = Element iqName attrs
 queryName :: Text -> Name
 queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
 
-query :: Text -> [Element] -> Element
-query namespace nodes = Element (queryName namespace) mempty $ NodeElement <$> nodes
+query :: Text -> [Node] -> Element
+query namespace nodes = Element (queryName namespace) mempty $ nodes
 
 identity :: Text -> Text -> Text -> Element
 identity category t name = Element "identity" attrs []
@@ -150,7 +148,7 @@ infoHandler sink i t to from c = do
   q <- tagNoAttr (matching (==infoQueryName)) c
   case q of
     Just q -> do
-      r <- yield (iq i "result" from to [NodeElement (query infoNamespace [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
+      r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
       return $ Just r
     Nothing -> return Nothing
   where
