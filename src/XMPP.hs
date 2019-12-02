@@ -41,6 +41,8 @@ instance Default XMPPSettings where
   def = XMPPSettings "localhost" 5222 "xmpp.db"
 
 type XMPPMonad    = ReaderT XMPPSettings (LoggingT IO)
+
 type JID          = Text
 type XMPPResource = Text
+
 type ChanMap      = Map JID ([XMPPResource], Map XMPPResource (TMChan Element))

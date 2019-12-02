@@ -114,9 +114,9 @@ receiveIq handler =
   where
     uncurry4 f (w, x, y, z) = f w x y z
     attrs = (,,,) <$>
-            requireAttr "id" <*>
+            requireAttr "id"   <*>
             requireAttr "type" <*>
-            requireAttr "to" <*>
+            requireAttr "to"   <*>
             requireAttr "from"
 
 iqHandler :: (MonadThrow m, MonadLogger m) =>
