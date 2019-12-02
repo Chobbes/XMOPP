@@ -335,30 +335,6 @@ test_feature = TestList
 -- test_login_fail :: Test
 -- test_login_fail = undefined
 
-unitTests :: Test
-unitTests = TestList
-  [ "awaitName"        ~: test_awaitName
-  , "streamRespHeader" ~: test_streamRespHeader
-  , "features"         ~: test_features
-  , "required"         ~: test_required
-  , "proceed"          ~: test_proceed
-  , "tlsFeatures"      ~: test_tlsFeatures
-  , "awaitAuth"        ~: test_awaitAuth
-  , "failure"          ~: test_failure
-  , "aborted"          ~: test_aborted
-  , "notAuthorized"    ~: test_notAuthorized
-  , "success"          ~: test_success
-  , "authFeatures"     ~: test_authFeatures
-  , "bindFeatures"     ~: test_bindFeatures
-  , "iqShort"          ~: test_iqShort
-  , "bind"             ~: test_bind
-  , "iq"               ~: test_iq
-  , "query"            ~: test_query
-  , "identity"         ~: test_identity
-  , "feature"          ~: test_feature
-  , "receiveMessage"   ~: testReceiveMessage
-  ]
-
 -- Tests that require IO
 
 -- Stream tests
@@ -751,6 +727,31 @@ main = do
               , (test_iqHandler4, "iqHandler 4")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 1 to 2")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")]
+
+    unitTests :: Test
+    unitTests = TestList
+      [ "awaitName"        ~: test_awaitName
+      , "streamRespHeader" ~: test_streamRespHeader
+      , "features"         ~: test_features
+      , "required"         ~: test_required
+      , "proceed"          ~: test_proceed
+      , "tlsFeatures"      ~: test_tlsFeatures
+      , "awaitAuth"        ~: test_awaitAuth
+      , "failure"          ~: test_failure
+      , "aborted"          ~: test_aborted
+      , "notAuthorized"    ~: test_notAuthorized
+      , "success"          ~: test_success
+      , "authFeatures"     ~: test_authFeatures
+      , "bindFeatures"     ~: test_bindFeatures
+      , "iqShort"          ~: test_iqShort
+      , "bind"             ~: test_bind
+      , "iq"               ~: test_iq
+      , "query"            ~: test_query
+      , "identity"         ~: test_identity
+      , "feature"          ~: test_feature
+      , "receiveMessage"   ~: testReceiveMessage
+      ]
+
 
     runXMPP = runNoLoggingT . flip runReaderT testSettings
 
