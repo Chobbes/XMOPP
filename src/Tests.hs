@@ -9,7 +9,7 @@ import Text.XML.Stream.Render
 import Data.Maybe
 import Data.UUID
 import qualified Data.ByteString as BS
-import Data.ByteString.Char8
+import Data.ByteString.Char8 (ByteString, pack, append)
 import Data.Conduit
 import Data.Default
 import Data.Conduit.List hiding (mapM_)
@@ -90,15 +90,16 @@ testUserResources = Prelude.zip testUsers testResources
 
 -- | Set up a bogus ChanMap with test users.
 -- Given a list of (User, [Resource]) pairs.
-testChanMapSetup :: MonadIO m => [(User, [Text])] -> m ChanMap
+testChanMapSetup :: (MonadIO m, MonadReader XMPPSettings m) => [(User, [Text])] -> m ChanMap
 testChanMapSetup users = do
+  dn <- asks fqdn
   m <- liftIO . atomically $ STC.empty
   forM_ users $ \(user, resources) ->
     forM_ resources $ \r ->
-      allocateChannel m (userName user) r
+      allocateChannel m (userJid dn user) r
   return m
 
-testChanMap :: MonadIO m => m ChanMap
+testChanMap :: (MonadIO m, MonadReader XMPPSettings m) => m ChanMap
 testChanMap = testChanMapSetup testUserResources
 
 -- | Set up DB with test users.
@@ -181,23 +182,25 @@ createMessage to from body uuid =
 
 -- | Test sending message from one user to another.
 -- Currently this is locking. Not sure why.
-testMessaging :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) => m Bool
-testMessaging = do
+testMessaging :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) =>
+  User -> User -> m Bool
+testMessaging toUser fromUser = do
   cm <- testChanMap
   dn <- asks fqdn
 
-  let to = userJid dn testUser2
-  let from = userJid dn testUser1
+  let to   = userJid dn toUser
+  let from = userJid dn fromUser
+
   uuid <- liftIO randomIO
 
   let msg = createMessage to from "yohoo" uuid
   runConduit $ sourceList (elementToEvents (toXMLElement msg)) .| receiveMessage (messageHandler cm)
 
   -- Fetch message
-  liftIO $ Prelude.putStrLn "oh dear"
-  channels <- liftIO . atomically $ getJidChannels cm (userName testUser2)
-  liftIO $ Prelude.putStrLn "got channels"
+  channels <- liftIO . atomically $ getJidChannels cm (userJid dn toUser)
   elems <- liftIO . atomically $ readAllChannels channels
+
+  -- Make sure message matches what we sent
   return $ Prelude.all (==Just msg) elems
 
 -- | Fetch all (maybe) messages for a user.
@@ -745,7 +748,11 @@ main = do
               , (test_iqHandler1, "iqHandler 1")
               , (test_iqHandler2, "iqHandler 2")
               , (test_iqHandler3, "iqHandler 3")
-              , (test_iqHandler4, "iqHandler 4") ]
+              , (test_iqHandler4, "iqHandler 4")
+              , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 1 to 2")
+              , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")]
+
+    runXMPP = runNoLoggingT . flip runReaderT testSettings
 
     runTests [] = return ()
     runTests ((t, name):ts) = do

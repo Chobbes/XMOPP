@@ -43,6 +43,7 @@ sendToJidAll
 sendToJidAll cm to elem = do
   channels <- liftIO . atomically $ getJidChannels cm to
   logDebugN $ "Message to: " <> to
+  logDebugN $ "Channels for " <> to <> ": " <> T.pack (show $ length channels)
   writeToAllChannels channels elem
 
 -- | Send message to a *specific* XMPP resource.
