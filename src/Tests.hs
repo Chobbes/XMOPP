@@ -468,7 +468,7 @@ test_bindHandler4 = do
   sent <- atomically $ tryTakeTMVar tv
 
   return $ (fmap renderElement <$> sent) ==
-    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/" `append` (pack $ fromMaybe "" (Data.Text.unpack <$> r)) `append` "</jid></bind></iq>"]
+    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/" `append` (pack $ fromMaybe "" (T.unpack <$> r)) `append` "</jid></bind></iq>"]
 
 -- Other Iq tests
 
