@@ -108,7 +108,8 @@ feature t = Element "feature" attrs []
   where attrs = M.fromList [("var", t)]
 
 receiveIq :: MonadThrow m =>
-  (Text -> Text -> Text -> Text -> ConduitT Event o m (Maybe r)) -> ConduitT Event o m (Maybe r)
+  (Text -> Text -> Text -> Maybe Text -> ConduitT Event o m (Maybe r)) ->
+  ConduitT Event o m (Maybe r)
 receiveIq handler =
   join <$> tag' (matching (==iqName)) attrs (uncurry4 handler)
   where
@@ -116,8 +117,8 @@ receiveIq handler =
     attrs = (,,,) <$>
             requireAttr "id"   <*>
             requireAttr "type" <*>
-            requireAttr "to"   <*>
-            requireAttr "from"
+            requireAttr "from" <*>
+            attr "to"
 
 iqHandler :: (MonadThrow m, MonadLogger m) =>
   ChanMap ->
@@ -125,14 +126,15 @@ iqHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   Text ->
-  Text ->
+  (Maybe Text) ->
   ConduitT Event o m (Maybe r)
-iqHandler cm sink i t to from =
-  choose $ (\f -> f sink i t to from) <$> [ infoHandler
+iqHandler cm sink i t from (Just to) =
+  choose $ (\f -> f sink i t from to) <$> [ infoHandler
                                           , itemsHandler
                                           , pingHandler
                                           , iqError ]
-
+iqHandler cm sink i t from Nothing =
+  choose $ (\f -> f sink i t from (fqdn def)) <$> [ iqError ]
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
@@ -144,14 +146,14 @@ infoHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-infoHandler sink i t to from =
+infoHandler sink i t from to =
   if t /= "get"
   then return Nothing
   else do
     q <- tagNoAttr (matching (==infoQueryName)) content
     case q of
       Just q -> do
-        r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature pingNamespace])]) .| sink
+        r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature itemsNamespace, feature pingNamespace, feature rosterNamespace])]) .| sink
         return $ Just r
       Nothing -> return Nothing
   where
@@ -167,7 +169,7 @@ itemsHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-itemsHandler sink i t to from =
+itemsHandler sink i t from to =
   if t /= "get"
   then return Nothing
   else do
@@ -190,7 +192,7 @@ pingHandler :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-pingHandler sink i t to from =
+pingHandler sink i t from to =
   if t /= "get"
   then return Nothing
   else do
@@ -203,6 +205,20 @@ pingHandler sink i t to from =
   where
     pingName = Name "ping" (Just pingNamespace) Nothing
 
+rosterNamespace :: Text
+rosterNamespace = "jabber:iq:roster"
+
+rosterHandler :: (MonadThrow m, MonadLogger m) =>
+  ConduitT Element o m r ->
+  Text ->
+  Text ->
+  Text ->
+  ConduitT Event o m (Maybe r)
+rosterHandler sink i t from =
+  if t == "get"
+  then undefined
+  else undefined
+
 iqError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Element o m r ->
   Text ->
@@ -210,7 +226,7 @@ iqError :: (MonadThrow m, MonadLogger m) =>
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-iqError sink i t to from = do
+iqError sink i t from to = do
   ignoreAnyTreeContent
   logDebugN $ "IQ error: " <> pack (show errorElem)
   r <- yield errorElem .| sink
