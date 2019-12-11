@@ -27,6 +27,10 @@ User
     password Text
     UniqueName name
     deriving Show Eq
+Roster
+    owner UserId
+    name Text
+    deriving Show Eq
 |]
 
 -- | Insert a list of users into the database.

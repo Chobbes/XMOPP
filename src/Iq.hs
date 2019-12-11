@@ -25,6 +25,7 @@ import qualified Data.Map as M
 import XMPP
 import Stream
 import Concurrency
+import Roster
 import Utils
 
 -- Bind stanzas
@@ -39,9 +40,6 @@ bindFeatures :: Element
 bindFeatures = features [NodeElement bind]
   where
     bind = Element bindName mempty []
-
-iqName :: Name
-iqName = Name {nameLocalName = "iq", nameNamespace = Just "jabber:client", namePrefix = Nothing}
 
 iqShort :: Text -> Text -> [Node] -> Element
 iqShort i t = Element iqName attrs
@@ -89,16 +87,6 @@ bindHandler cm jid sink i t =
 
 -- "Normal" Iq stanzas
 
-iq :: Text -> Text -> Text -> Text -> [Node] -> Element
-iq i t to from = Element iqName attrs
-  where attrs = M.fromList [("id", i), ("type", t), ("to", to), ("from", from)]
-
-queryName :: Text -> Name
-queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
-
-query :: Text -> [Node] -> Element
-query namespace nodes = Element (queryName namespace) mempty $ nodes
-
 identity :: Text -> Text -> Text -> Element
 identity category t name = Element "identity" attrs []
   where attrs = M.fromList [("category", category), ("type", t), ("name", name)]
@@ -120,7 +108,7 @@ receiveIq handler =
             requireAttr "from" <*>
             attr "to"
 
-iqHandler :: (MonadThrow m, MonadLogger m) =>
+iqHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
   ChanMap ->
   ConduitT Element o m r ->
   Text ->
@@ -129,12 +117,16 @@ iqHandler :: (MonadThrow m, MonadLogger m) =>
   (Maybe Text) ->
   ConduitT Event o m (Maybe r)
 iqHandler cm sink i t from (Just to) =
-  choose $ (\f -> f sink i t from to) <$> [ infoHandler
-                                          , itemsHandler
-                                          , pingHandler
-                                          , iqError ]
+  choose $ (\f -> f sink i t from to) <$>
+  [ infoHandler
+  , itemsHandler
+  , pingHandler
+  , iqError ]
+
 iqHandler cm sink i t from Nothing =
-  choose $ (\f -> f sink i t from (fqdn def)) <$> [ iqError ]
+  choose $ (\f -> f sink i t from) <$>
+  [ rosterHandler
+  , (\sink i t from -> iqError sink i t from (fqdn def))]
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
@@ -204,20 +196,6 @@ pingHandler sink i t from to =
       Nothing -> return Nothing
   where
     pingName = Name "ping" (Just pingNamespace) Nothing
-
-rosterNamespace :: Text
-rosterNamespace = "jabber:iq:roster"
-
-rosterHandler :: (MonadThrow m, MonadLogger m) =>
-  ConduitT Element o m r ->
-  Text ->
-  Text ->
-  Text ->
-  ConduitT Event o m (Maybe r)
-rosterHandler sink i t from =
-  if t == "get"
-  then undefined
-  else undefined
 
 iqError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Element o m r ->

@@ -34,13 +34,13 @@ import Iq
 import Messages
 import Logging
 
---------------------------------------------------
--- XMPP Stanzas
---------------------------------------------------
-
 -- | Construct a jid from an fqdn and a user.
 userJid :: Text -> User -> Text
 userJid fqdn u = userName u <> "@" <> fqdn
+
+--------------------------------------------------
+-- XMPP Stanzas
+--------------------------------------------------
 
 -- | Todo, figure out how to allow for stream restarts at any point.
 -- This should be architected more like a state machine.
