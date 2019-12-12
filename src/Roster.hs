@@ -41,40 +41,50 @@ rosterHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, Monad
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-rosterHandler sink i t from = do
-  join <$> tagNoAttr (matching (==rosterName)) itemHandler
+rosterHandler sink i t from =
+  case nameFromJid from of
+    Nothing -> do
+      logDebugN $ "Roster error: invalid from attr: " <> from
+      return Nothing
+    Just owner -> join <$> tagNoAttr (matching (==rosterName)) (itemHandler owner)
   where
     rosterName = queryName rosterNamespace
     itemName = Name "item" (Just rosterNamespace) Nothing
-    itemHandler =
-      case nameFromJid from of
-        Nothing -> do
-          logDebugN $ "Roster error: invalid from attr: " <> from
-          return Nothing
-        Just name ->
-          case t of
-            "get" -> do
+
+    -- TODO rename?
+    app Nothing _ = Nothing
+    app (Just (a, b)) f = case f a of
+                             Nothing -> Nothing
+                             Just a -> Just (a, b)
+    itemHandler owner =
+      case t of
+        "get" -> do
+          db <- asks xmppDB
+          do
+            roster <- liftIO $ runSqlite db $ getRoster owner
+            r <- yield (iq i "result" from (fqdn def) $ [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
+            return $ Just r
+        "set" -> do
+          attrs <- tag'
+                   (matching (==itemName))
+                   ((,) <$> requireAttr "jid" <*> attr "subscription")
+                   (\(jid, subscription) -> return (jid, subscription == Just "remove"))
+          case (app attrs nameFromJid) of
+            Nothing -> return Nothing
+            Just (name, remove) -> do
               db <- asks xmppDB
-              do
-                roster <- liftIO $ runSqlite db $ getRoster name
-                r <- yield (iq i "result" from (fqdn def) $ [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
-                return $ Just r
-            "set" -> do
-              jid <- tag' (matching (==itemName)) (requireAttr "jid") return
-              case join (nameFromJid <$> jid) of
-                Nothing -> return Nothing
-                Just jid -> do
-                  db <- asks xmppDB
-                  r <- liftIO $ runSqlite db $ addRoster name jid
-                  case r of
-                    Nothing -> do
-                      logDebugN $ "Roster error: user not found: " <> name
-                      return Nothing
-                    Just _ -> do
-                      r <- yield (iq i "result" from (fqdn def) $ []) .| sink
-                      return $ Just r
-            _ ->
-              return Nothing
+              r <- liftIO $ runSqlite db $ if remove
+                                           then removeRoster owner name
+                                           else addRoster owner name
+              case r of
+                Nothing -> do
+                  logDebugN $ "Roster error: user not found: " <> owner
+                  return Nothing
+                Just _ -> do
+                  r <- yield (iq i "result" from (fqdn def) $ []) .| sink
+                  return $ Just r
+        _ ->
+          return Nothing
 
 rosterItems :: [Entity Roster] -> [Node]
 rosterItems l = fmap (\(Entity _ roster) ->
@@ -94,19 +104,32 @@ getRoster name = do
     Nothing -> return []
     Just (Entity userId user) -> selectList [RosterOwner ==. userId] []
 
+removeRoster :: (MonadIO m,
+              PersistUniqueRead backend,
+              PersistQueryWrite backend,
+              BaseBackend backend ~ SqlBackend) =>
+     Text -> Text -> ReaderT backend m (Maybe Text)
+removeRoster owner name = do
+  ownerEntity <- getBy (UniqueName owner)
+  case ownerEntity of
+    Nothing -> return Nothing
+    Just (Entity ownerId _) -> do
+      void $ deleteWhere [RosterOwner ==. ownerId, RosterName ==. name]
+      return $ Just name
+
 -- Adds a new entry to the roster. TODO: Doesn't check for duplicates.
 addRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistStoreWrite backend,
               BaseBackend backend ~ SqlBackend) =>
      Text -> Text -> ReaderT backend m (Maybe Text)
-addRoster name jid = do
-  ownerEntity <- getBy (UniqueName name)
+addRoster owner name = do
+  ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
     Nothing -> return Nothing
     Just (Entity ownerId _) -> do
-      void $ insert (Roster ownerId jid)
-      return $ Just jid
+      void $ insert (Roster ownerId name)
+      return $ Just name
 
 -- Temp testing for inserting things into roster since I can't figure out how to do it in sqlite
 main :: IO ()
