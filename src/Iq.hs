@@ -66,8 +66,8 @@ bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
 bindHandler cm jid sink i t =
   if t /= "set"
   then do
-    logErrorN "Expected iq stanza with type = set for resource binding, but type =/= set."
-    ignoreAnyTreeContent
+    logErrorN $ "Expected iq stanza with type = set for resource binding, but type is " <> t <> "."
+    ignoreAnyTreeContent -- TODO needed?
     return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
@@ -144,7 +144,7 @@ infoHandler sink i t from to =
   else do
     q <- tagNoAttr (matching (==infoQueryName)) content
     case q of
-      Just q -> do
+      Just _ -> do
         r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature itemsNamespace, feature pingNamespace, feature rosterNamespace])]) .| sink
         return $ Just r
       Nothing -> return Nothing
@@ -167,7 +167,7 @@ itemsHandler sink i t from to =
   else do
     q <- tagNoAttr (matching (==itemsQueryName)) content
     case q of
-      Just q -> do
+      Just _ -> do
         r <- yield (iq i "result" from to [NodeElement (query itemsNamespace [])]) .| sink
         return $ Just r
       Nothing -> return Nothing
@@ -190,7 +190,7 @@ pingHandler sink i t from to =
   else do
     q <- tagNoAttr (matching (==pingName)) content
     case q of
-      Just q -> do
+      Just _ -> do
         r <- yield (iq i "result" from to []) .| sink
         return $ Just r
       Nothing -> return Nothing

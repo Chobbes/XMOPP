@@ -34,25 +34,39 @@ rosterHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, Monad
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-rosterHandler sink i t from =
-  case t of
-    "get" -> do
-      q <- tagNoAttr (matching (==rosterName)) content
-      case q of
-        Nothing -> return Nothing
-        Just q ->
-          case splitOn "@" from of
-            [] -> do
-              logDebugN $ "Roster error: invalid from attr: " <> from
-              return Nothing
-            (name:_) -> do
+rosterHandler sink i t from = do
+  q <- tagNoAttr (matching (==rosterName)) content
+  case q of
+    Nothing -> return Nothing
+    Just _ ->
+      case splitOn "@" from of
+        [] -> do
+          logDebugN $ "Roster error: invalid from attr: " <> from
+          return Nothing
+        (name:_) ->
+          case t of
+            "get" -> do
               db <- asks xmppDB
               do
                 roster <- liftIO $ runSqlite db $ getRoster name
                 r <- yield (iq i "result" from (fqdn def) $ [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
                 return $ Just r
-    "set" -> return Nothing
-    _ -> return Nothing
+            "set" -> do
+              jid <- tag' "item" (requireAttr "jid") (\jid -> do
+                                                         ignoreAnyTreeContent -- TODO
+                                                         return jid)
+              case jid of
+                Nothing -> return Nothing
+                Just jid -> do
+                  db <- asks xmppDB
+                  liftIO $ runSqlite db $ do
+                    ownerEntity <- getBy (UniqueName name)
+                    case ownerEntity of
+                      Nothing -> logDebugN $ "Roster error: user not found: " <> name
+                      Just (Entity ownerId _) -> do
+                        void $ insert (Roster ownerId jid)
+                  return Nothing
+            _ -> return Nothing
   where
     rosterName = queryName rosterNamespace
 
@@ -60,7 +74,7 @@ rosterItems :: [Entity Roster] -> [Node]
 rosterItems l = fmap (\(Entity _ roster) ->
                          NodeElement $ Element
                          "item"
-                         (M.fromList [("jid", rosterName roster <> "@" <> (fqdn def))])
+                         (M.fromList [("jid", rosterName roster <> "@" <> fqdn def)])
                          []) l
 
 getRoster :: (MonadIO m,
