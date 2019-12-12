@@ -32,6 +32,7 @@ import TLS
 import SASL
 import Iq
 import Messages
+import Presence
 import Logging
 
 -- | Construct a jid from an fqdn and a user.
@@ -94,6 +95,7 @@ handleClient' cm source sink bytesink = runConduit $ do
     where messageLoop jid = do
             source .| choose [ receiveMessage (messageHandler cm)
                              , receiveIq (iqHandler cm (void sink))
+                             , receivePresence presenceHandler
                              ]
             messageLoop jid
 

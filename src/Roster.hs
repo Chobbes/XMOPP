@@ -19,8 +19,6 @@ import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Data.Map as M
 
-import Debug.Trace
-
 import XMPP
 import Stream
 import Concurrency
@@ -67,7 +65,7 @@ rosterHandler sink i t from =
         "set" -> do
           attrs <- tag'
                    (matching (==itemName))
-                   ((,) <$> requireAttr "jid" <*> attr "subscription")
+                   ((,) <$> requireAttr "jid" <*> attr "subscription" <* ignoreAttrs)
                    (\(jid, subscription) -> return (jid, subscription == Just "remove"))
           case (app attrs nameFromJid) of
             Nothing -> return Nothing
