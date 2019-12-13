@@ -15,14 +15,18 @@ import Debug.Trace
 import XMPP
 import Utils
 
-receivePresence :: MonadThrow m =>
-     (Text -> ConduitT Event o m (Maybe c)) -> ConduitT Event o m (Maybe c)
-receivePresence handler =
-  join <$> tag' "{jabber:client}presence" attrs handler
-  where
-    attrs = requireAttr "from" <* ignoreAttrs
+presenceName :: Name
+presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:client", namePrefix = Nothing}
 
-presenceHandler :: MonadThrow m => Text -> ConduitT Event o m (Maybe ())
-presenceHandler from = do
-  skipToEnd "{jabber:client}presence"
+receivePresence :: MonadThrow m =>
+     (Text -> Maybe Text -> ConduitT Event o m (Maybe c)) -> ConduitT Event o m (Maybe c)
+receivePresence handler =
+  join <$> tag' (matching (==presenceName)) attrs (uncurry handler)
+  where
+    attrs = (,) <$> requireAttr "from" <*> attr "type" <* ignoreAttrs
+
+presenceHandler :: MonadThrow m =>
+  ChanMap -> Text -> Maybe Text -> ConduitT Event o m (Maybe ())
+presenceHandler cm from t = do
+  skipToEnd presenceName
   return $ Just ()

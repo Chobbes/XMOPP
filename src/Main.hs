@@ -95,7 +95,7 @@ handleClient' cm source sink bytesink = runConduit $ do
     where messageLoop jid = do
             source .| choose [ receiveMessage (messageHandler cm)
                              , receiveIq (iqHandler cm (void sink))
-                             , receivePresence presenceHandler
+                             , receivePresence (presenceHandler cm)
                              ]
             messageLoop jid
 

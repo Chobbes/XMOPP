@@ -67,7 +67,7 @@ rosterHandler sink i t from =
                    (matching (==itemName))
                    ((,) <$> requireAttr "jid" <*> attr "subscription" <* ignoreAttrs)
                    (\(jid, subscription) -> return (jid, subscription == Just "remove"))
-          case (app attrs nameFromJid) of
+          case attrs of
             Nothing -> return Nothing
             Just (name, remove) -> do
               db <- asks xmppDB
@@ -88,7 +88,7 @@ rosterItems :: [Entity Roster] -> [Node]
 rosterItems l = fmap (\(Entity _ roster) ->
                          NodeElement $ Element
                          "item"
-                         (M.fromList [("jid", rosterName roster <> "@" <> fqdn def)])
+                         (M.fromList [("jid", rosterName roster)])
                          []) l
 
 getRoster :: (MonadIO m,
