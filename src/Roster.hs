@@ -3,14 +3,11 @@
 {-# LANGUAGE GADTs               #-}
 module Roster where
 
-import Database.Persist
 import Database.Persist.Sqlite
 import Data.Conduit
-import Data.Conduit.List
 import Data.Conduit.Network
 import Data.Text (Text, pack, unpack, splitOn)
 import Data.XML.Types (Event(..), Content(..))
-import Control.Monad
 import Control.Monad.Catch
 import Control.Monad.Reader
 import Control.Monad.Logger
