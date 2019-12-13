@@ -48,12 +48,6 @@ rosterHandler sink i t from =
   where
     rosterName = queryName rosterNamespace
     itemName = Name "item" (Just rosterNamespace) Nothing
-
-    -- TODO rename?
-    app Nothing _ = Nothing
-    app (Just (a, b)) f = case f a of
-                             Nothing -> Nothing
-                             Just a -> Just (a, b)
     itemHandler owner =
       case t of
         "get" -> do
@@ -84,36 +78,35 @@ rosterHandler sink i t from =
         _ ->
           return Nothing
 
-rosterItems :: [Entity Roster] -> [Node]
-rosterItems l = fmap (\(Entity _ roster) ->
-                         NodeElement $ Element
-                         "item"
-                         (M.fromList [("jid", rosterName roster)])
-                         []) l
+rosterItems :: [Roster] -> [Node]
+rosterItems = fmap (\roster -> NodeElement $ Element
+                               "item"
+                               (M.fromList [("jid", rosterName roster)])
+                               [])
 
 getRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistQueryRead backend,
               BaseBackend backend ~ SqlBackend) =>
-  Text -> ReaderT backend m [Entity Roster]
+  Text -> ReaderT backend m [Roster]
 getRoster name = do
   userEntity <- getBy (UniqueName name)
   case userEntity of
     Nothing -> return []
-    Just (Entity userId user) -> selectList [RosterOwner ==. userId] []
+    Just (Entity userId user) -> fmap entityVal <$> selectList [RosterOwner ==. userId] []
 
 removeRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistQueryWrite backend,
               BaseBackend backend ~ SqlBackend) =>
      Text -> Text -> ReaderT backend m (Maybe Text)
-removeRoster owner name = do
+removeRoster owner jid = do
   ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
     Nothing -> return Nothing
     Just (Entity ownerId _) -> do
-      void $ deleteWhere [RosterOwner ==. ownerId, RosterName ==. name]
-      return $ Just name
+      deleteWhere [RosterOwner ==. ownerId, RosterName ==. jid]
+      return $ Just jid
 
 -- Adds a new entry to the roster. TODO: Doesn't check for duplicates.
 addRoster :: (MonadIO m,
@@ -126,16 +119,5 @@ addRoster owner name = do
   case ownerEntity of
     Nothing -> return Nothing
     Just (Entity ownerId _) -> do
-      void $ insert (Roster ownerId name)
+      insert (Roster ownerId name)
       return $ Just name
-
--- Temp testing for inserting things into roster since I can't figure out how to do it in sqlite
-main :: IO ()
-main = runSqlite (xmppDB def) $ do
-  userEntity <- getBy (UniqueName "grain")
-  case userEntity of
-    Nothing -> return ()
-    Just (Entity userId user) -> do
-      insert $ Roster userId "paul"
-      roster <- selectList [RosterOwner ==. userId] []
-      liftIO $ print roster

@@ -25,21 +25,18 @@ import XMPP
 -- an element over that channel.
 --
 -- If the jid has a resource as well, only send to that specific resource.
-sendToJid
-  :: (MonadIO m, MonadLogger m) =>
+sendToJid :: (MonadIO m, MonadLogger m) =>
      ChanMap -> Text -> Element -> m ()
 sendToJid cm to elem =
   case T.splitOn "/" to of
-    [jid]           -> sendToJidAll cm jid elem
     [jid, resource] -> sendToResource cm jid resource elem
     (jid:_)         -> sendToJidAll cm jid elem
     _               -> return ()
 
 -- | Look up channels associated with a given jid in the channel map, and send
 -- an element over that channel.
-sendToJidAll
-  :: (MonadIO m, MonadLogger m) =>
-     ChanMap -> Text -> Element -> m ()
+sendToJidAll :: (MonadIO m, MonadLogger m) =>
+     ChanMap -> JID -> Element -> m ()
 sendToJidAll cm to elem = do
   channels <- liftIO . atomically $ getJidChannels cm to
   logDebugN $ "Message to: " <> to
@@ -47,8 +44,7 @@ sendToJidAll cm to elem = do
   writeToAllChannels channels elem
 
 -- | Send message to a *specific* XMPP resource.
-sendToResource :: MonadIO m =>
-     ChanMap -> Text -> Text -> Element -> m ()
+sendToResource :: MonadIO m => ChanMap -> JID -> XMPPResource -> Element -> m ()
 sendToResource cm jid resource elem = do
   mchan <- liftIO . atomically $ do
     mm <- STC.lookup jid cm
@@ -60,9 +56,7 @@ sendToResource cm jid resource elem = do
     Just chan -> liftIO . atomically $ writeTMChan chan elem
 
 -- | Get channels associated with a jid
-getJidChannels
-  :: (Eq k1, Eq k2, Hashable k1, Hashable k2) =>
-     Map k1 ([k2], Map k2 a) -> k1 -> STM [a]
+getJidChannels :: ChanMap -> JID -> STM [TMChan Element]
 getJidChannels cm jid = do
   mm <- STC.lookup jid cm
   chans <- case mm of
