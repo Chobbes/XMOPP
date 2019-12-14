@@ -65,7 +65,9 @@ presenceHandler cm from t = do
                       return $ void mm
                     case r of
                       Nothing -> return ()
-                      Just _ -> sendToJidAll cm ownerJid $ presenceElement jid from)
+                      Just _ -> if (elem (name <> "@" <> (fqdn def)) (rosterName <$> roster))
+                                then (sendToJidAll cm ownerJid $ presenceElement jid from)
+                                else return ())
         else return ()
       return $ Just ()
     _ -> return Nothing
