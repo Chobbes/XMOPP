@@ -37,7 +37,7 @@ import Presence
 import Logging
 
 -- | Construct a jid from an fqdn and a user.
-userJid :: Text -> User -> Text
+userJid :: Text -> User -> JID
 userJid fqdn u = userName u <> "@" <> fqdn
 
 --------------------------------------------------
@@ -96,14 +96,7 @@ handleClient' handleStreamEvents cm source sink bytesink = runConduit $ do
 
       logDebugN $ "End of stream for: " <> jid
 
-type StreamEventHandler m i o r' r = (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
-      MonadUnliftIO m) =>
-     ChanMap
-     -> ConduitM i Event m ()
-     -> ConduitT Element o m r'
-     -> Text
-     -> ConduitT i o m r
-
+-- | Default handler for stream events (messaging, iq, and presence).
 handleStreamDefault
   :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
       MonadUnliftIO m) =>

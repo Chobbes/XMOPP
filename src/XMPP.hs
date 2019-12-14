@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -15,10 +16,13 @@ import Control.Concurrent.STM.Map as STC
 import Control.Monad.Reader.Class
 import Control.Monad.Reader
 import Control.Monad.Logger
+import Control.Monad.Catch
+import Control.Monad.IO.Unlift
 
 import Data.Conduit
 import Data.Conduit.TMChan
 import Text.XML
+import Data.XML.Types (Event(..), Content(..))
 
 import Database.Persist
 import Database.Persist.Sqlite
@@ -46,3 +50,11 @@ type JID          = Text
 type XMPPResource = Text
 
 type ChanMap      = Map JID ([XMPPResource], Map XMPPResource (TMChan Element))
+
+type StreamEventHandler m i o r' r = (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
+      MonadUnliftIO m) =>
+     ChanMap
+     -> ConduitM i Event m ()
+     -> ConduitT Element o m r'
+     -> JID
+     -> ConduitT i o m r
