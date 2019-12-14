@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Main where
@@ -48,20 +49,22 @@ userJid fqdn u = userName u <> "@" <> fqdn
 handleClient
   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m,
       MonadUnliftIO m, MonadLogger m) =>
+     StreamEventHandler m () Void () () ->
      ChanMap -> AppData -> m ()
-handleClient cm ad =
+handleClient handleStreamEvents cm ad =
   do (sink, chan) <- liftIO $ forkSink (appSink ad)
-     handleClient' cm (appSource ad .| parseBytes def) sink (appSink ad)
+     handleClient' handleStreamEvents cm (appSource ad .| parseBytes def) sink (appSink ad)
 
 -- Separated for testing
 handleClient'
    :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, MonadLogger m, Show r) =>
+   StreamEventHandler m () Void r () ->
    ChanMap ->
    ConduitT () Event m () ->
    ConduitT Element Void m r ->
    ConduitT BS.ByteString Void m r ->
    m ()
-handleClient' cm source sink bytesink = runConduit $ do
+handleClient' handleStreamEvents cm source sink bytesink = runConduit $ do
   streamid <- openStreamIO source bytesink
 
   -- Get user and pass
@@ -86,18 +89,32 @@ handleClient' cm source sink bytesink = runConduit $ do
       case resource of
         Nothing       -> logDebugN $ "Could not bind resource for: " <> jid
         Just resource -> do
-          messageLoop jid
+          handleStreamEvents cm source sink jid
 
           -- Free channel. TODO: look into resourceT
           freeResource cm jid resource
 
       logDebugN $ "End of stream for: " <> jid
-    where messageLoop jid = do
-            source .| choose [ receiveMessage (messageHandler cm)
-                             , receiveIq (iqHandler cm (void sink))
-                             , receivePresence (presenceHandler cm)
-                             ]
-            messageLoop jid
+
+type StreamEventHandler m i o r' r = (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
+      MonadUnliftIO m) =>
+     ChanMap
+     -> ConduitM i Event m ()
+     -> ConduitT Element o m r'
+     -> Text
+     -> ConduitT i o m r
+
+handleStreamDefault
+  :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
+      MonadUnliftIO m) =>
+     StreamEventHandler m i o r' r
+handleStreamDefault cm source sink jid = do
+  source .| choose [ receiveMessage (messageHandler cm)
+                   , receiveIq (iqHandler cm (void sink))
+                   , receivePresence (presenceHandler cm)
+                   ]
+  handleStreamDefault cm source sink jid
+
 
 --------------------------------------------------
 -- Main server
@@ -121,4 +138,4 @@ xmpp ::
 xmpp cm (appData, stls) = do
   startTLSIO appData
   logDebugN "Starting TLS..."
-  stls $ handleClient cm
+  stls $ handleClient handleStreamDefault cm
