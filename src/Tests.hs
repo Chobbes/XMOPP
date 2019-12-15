@@ -92,20 +92,6 @@ test_receiveMessage = TestList
     aux msg = join . join $
       runConduit (yield msg .| parseBytes def .| receiveMessage messageBody)
 
--- | Create a message with UUID.
-createMessage :: JID -> JID -> Text -> UUID -> Element
-createMessage to from body uuid =
-  Element "{jabber:client}message"
-          (M.fromList [ ("from",from)
-                      , ("to",to)
-                      , ("type","chat")
-                      , ("id", toText uuid)])
-          [ NodeElement (Element "{jabber:client}body" mempty [NodeContent body])
-          , NodeElement (Element "{urn:xmpp:sid:0}origin-id" (M.fromList [("id", toText uuid)]) [])
-          , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
-          , NodeElement (Element "{jabber:client}thread" mempty [NodeContent "testThreadId"])
-          ]
-
 -- | Test sending message from one user to another.
 testMessaging :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) =>
   User -> User -> m Bool
@@ -710,20 +696,9 @@ testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")])
 testDocument = Document emptyPrologue testElement []
 
 
-
 --------------------------------------------------
--- Test handleClient'
+-- Test handleClient' and plainAuth
 --------------------------------------------------
-
--- | Create an XML message for login.
-createAuthStanza :: User -> Element
-createAuthStanza (User user pass) =
-  Element authName
-          (M.fromList [("mechanism","PLAIN")])
-          [ NodeContent authText ]
-  where authText = decodeUtf8 . BS64.encode $ mconcat [BS.singleton 0, userBS, BS.singleton 0, passBS]
-        userBS = encodeUtf8 user
-        passBS = encodeUtf8 pass
 
 -- | Test plainAuth with XML stanzas.
 testPlainAuth
