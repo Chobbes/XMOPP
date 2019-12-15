@@ -228,6 +228,31 @@ lookupUserMessages cm user = do
   channels <- getJidChannels cm (userName user)
   readAllChannels channels
 
+-- Utils tests
+
+test_iq :: Test
+test_iq = TestList
+  [ renderElement (iq "id" "type" "to" "from" []) ~?=
+    "<iq from=\"from\" id=\"id\" to=\"to\" type=\"type\" xmlns=\"jabber:client\"/>"
+  , renderElement (iq "i" "t" "t" "f" $ NodeElement <$> [proceed, proceed]) ~?=
+    "<iq from=\"f\" id=\"i\" to=\"t\" type=\"t\" xmlns=\"jabber:client\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></iq>" ]
+
+test_query :: Test
+test_query = TestList
+  [ renderElement (query "info" []) ~?=
+    "<query xmlns=\"info\"/>"
+  , renderElement (query "items" $ NodeElement <$> [proceed, proceed]) ~?=
+    "<query xmlns=\"items\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></query>" ]
+
+test_skipToEnd :: Test
+test_skipToEnd = TestList
+  [ runST (runConduit $ yield "test</a>" .| parseBytes def .| (skipToEnd >> consume)) ~?=
+    [EventEndElement "a", EventEndDocument]
+  , runST (runConduit $ yield "<a>test</a></a>" .| parseBytes def .| (skipToEnd >> consume)) ~?=
+    [EventEndElement "a", EventEndDocument]
+  , runST (runConduit $ yield "<a>test</a></a><asdf/>" .| parseBytes def .| (skipToEnd >> consume)) ~?=
+    [EventEndElement "a", EventBeginElement "asdf" [], EventEndElement "asdf", EventEndDocument] ]
+
 -- Stream module tests
 
 test_awaitName :: Test
@@ -256,8 +281,7 @@ test_features = TestList
     "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><required/></stream:features>" ]
 
 test_required :: Test
-test_required = renderElement required ~?=
-                "<required/>"
+test_required = renderElement required ~?= "<required/>"
 
 -- TLS tests
 
@@ -286,10 +310,6 @@ test_failure = TestList
     "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"/>"
   , renderElement (failure $ NodeElement <$> [proceed, proceed]) ~?=
     "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></failure>" ]
-
-test_aborted :: Test
-test_aborted = renderElement aborted ~?=
-               "<failure xmlns=\"urn:ietf:params:xml:ns:xmpp-sasl\"><aborted xmlns=\"\"/></failure>"
 
 test_notAuthorized :: Test
 test_notAuthorized = renderElement notAuthorized ~?=
@@ -320,20 +340,6 @@ test_bind :: Test
 test_bind = renderElement (bind "test") ~?=
             "<bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test</jid></bind>"
 
-test_iq :: Test
-test_iq = TestList
-  [ renderElement (iq "id" "type" "to" "from" []) ~?=
-    "<iq from=\"from\" id=\"id\" to=\"to\" type=\"type\" xmlns=\"jabber:client\"/>"
-  , renderElement (iq "i" "t" "t" "f" $ NodeElement <$> [proceed, proceed]) ~?=
-    "<iq from=\"f\" id=\"i\" to=\"t\" type=\"t\" xmlns=\"jabber:client\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></iq>" ]
-
-test_query :: Test
-test_query = TestList
-  [ renderElement (query "info" []) ~?=
-    "<query xmlns=\"info\"/>"
-  , renderElement (query "items" $ NodeElement <$> [proceed, proceed]) ~?=
-    "<query xmlns=\"items\"><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/><proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/></query>" ]
-
 test_identity :: Test
 test_identity = TestList
   [ renderElement (identity "c" "t" "n") ~?=
@@ -354,10 +360,11 @@ test_feature = TestList
 -- test_login_fail :: Test
 -- test_login_fail = undefined
 
+----------------------------
 -- Tests that require IO
+----------------------------
 
 -- Stream tests
--- TODO tests for whether the client initiates or we initiate. See comments in Stream.hs for details.
 test_openStream :: IO Bool
 test_openStream = do
   (sink, tv) <- newTestSink
@@ -543,25 +550,6 @@ test_pingHandler1 = do
 
   return $ isNothing r && isNothing sent
 
--- test_pingHandler3 :: IO Bool
--- test_pingHandler3 = do
---  (sink, tv) <- newTestSink
-
---   -- type is not get
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ pingHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
-
--- test_pingHandler4 :: IO Bool
--- test_pingHandler4 = do
---  (sink, tv) <- newTestSink
-
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"wrong\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ pingHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
-
 test_pingHandler2 :: IO Bool
 test_pingHandler2 = do
   (sink, tv) <- newTestSink
@@ -672,7 +660,10 @@ main = do
 
     unitTests :: Test
     unitTests = TestList
-      [ "awaitName"        ~: test_awaitName
+      [ "iq"               ~: test_iq
+      , "query"            ~: test_query
+      , "skipToEnd"        ~: test_skipToEnd
+      , "awaitName"        ~: test_awaitName
       , "streamRespHeader" ~: test_streamRespHeader
       , "features"         ~: test_features
       , "required"         ~: test_required
@@ -680,15 +671,12 @@ main = do
       , "tlsFeatures"      ~: test_tlsFeatures
       , "awaitAuth"        ~: test_awaitAuth
       , "failure"          ~: test_failure
-      , "aborted"          ~: test_aborted
       , "notAuthorized"    ~: test_notAuthorized
       , "success"          ~: test_success
       , "authFeatures"     ~: test_authFeatures
       , "bindFeatures"     ~: test_bindFeatures
       , "iqShort"          ~: test_iqShort
       , "bind"             ~: test_bind
-      , "iq"               ~: test_iq
-      , "query"            ~: test_query
       , "identity"         ~: test_identity
       , "feature"          ~: test_feature
       , "receiveMessage"   ~: testReceiveMessage

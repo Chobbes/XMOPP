@@ -75,11 +75,6 @@ authenticate user pass = do
 failure :: [Node] -> Element
 failure = Element (Name "failure" (Just saslNamespace) Nothing) mempty
 
--- TODO on receiving abort we need to reply with this
-aborted :: Element
-aborted = failure [NodeElement abortElement]
-  where abortElement = Element "aborted" mempty []
-
 notAuthorized :: Element
 notAuthorized = failure [NodeElement notAuthElement]
   where notAuthElement = Element "not-authorized" mempty []

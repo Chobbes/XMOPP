@@ -46,12 +46,6 @@ streamRespHeader from lang streamId =
                 , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang]) ]
         at name content = (Name name Nothing Nothing, [ContentText content])
 
--- | End of stream.
-streamEndHeader :: Monad m => ConduitT i Event m ()
-streamEndHeader =
-  yield $ EventEndElement streamName
-
--- TODO: right now we only handle clients opening the stream, since the message sent when opening the stream doesn't include the UUID. These functions handle replying to the client who sends the first message.
 -- | Open a stream with a random UUID
 openStreamIO
   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadLogger m, MonadIO m) =>
@@ -70,7 +64,7 @@ openStream
      ConduitT BS.ByteString o m r ->  -- ^ Need to use BS because XML renderer doesn't flush.
      ConduitT i o m UUID
 openStream uuid source sink = do
-  stream <- source .| awaitStream -- TODO check if stream == Nothing. Then maybe we can send a stream without a UUID?
+  stream <- source .| awaitStream
   logDebugN "Got connection stream..."
   initiateStream uuid sink
 
@@ -83,12 +77,6 @@ initiateStream streamId sink = do
     streamRespHeader fqdn "en" streamId .| XR.renderBytes def .| sink
     logDebugN "Done stream response..."
     return streamId
-
--- | Close a stream.
-closeStream :: (PrimMonad m, MonadReader XMPPSettings m, MonadLogger m) =>
-  ConduitT BS.ByteString o m r -> ConduitT i o m r
-closeStream sink = streamEndHeader .| XR.renderBytes def .| sink
-
 
 features :: [Node] -> Element
 features = Element featureName mempty
