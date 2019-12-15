@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE OverloadedStrings #-}
 module TestUtils where
 
 import Data.Text as T (Text, unpack)
@@ -49,7 +50,7 @@ import XMPP
 import Users
 import Concurrency
 import SASL
-
+import Stream
 
 --------------------------------------------------
 -- Test utilities / setup
@@ -174,3 +175,7 @@ createMessage to from body uuid =
           , NodeElement (Element "{jabber:client}thread" mempty [NodeContent "testThreadId"])
           ]
 
+-- | Open a stream.
+createOpenStream :: Text -> Event
+createOpenStream fqdn =
+  EventBeginElement streamName [("to", [ContentText fqdn])]

@@ -719,7 +719,8 @@ testHandleClient user = do
   (bytesink, tv) <- newTestSink
   (sink, chan) <- forkSink bytesink
   cm <- testChanMap
+  dn <- asks fqdn
 
   let authMsg = createAuthStanza user
-  let source = sourceList (elementToEvents (toXMLElement authMsg))
+  let source = sourceList (createOpenStream dn : elementToEvents (toXMLElement authMsg))
   handleClient' handleStreamDefault cm source sink bytesink
