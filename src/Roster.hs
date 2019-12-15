@@ -60,7 +60,8 @@ rosterHandler cm sink i t from =
           db <- asks xmppDB
           do
             roster <- liftIO $ runSqlite db $ getRoster owner
-            r <- yield (iq i "result" from (fqdn def) $ [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
+            r <- yield (iq i "result" from (fqdn def)
+                        [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
             return $ Just r
         "set" -> do
           attrs <- tag'
@@ -79,7 +80,7 @@ rosterHandler cm sink i t from =
                   logDebugN $ "Roster error: user not found: " <> owner
                   return Nothing
                 Just _ -> do
-                  r <- yield (iq i "result" from (fqdn def) $ []) .| sink
+                  r <- yield (iq i "result" from (fqdn def) []) .| sink
                   fqdn <- asks fqdn
                   let ownerJid = owner <> "@" <> fqdn
                   if remove

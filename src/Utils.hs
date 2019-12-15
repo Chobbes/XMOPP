@@ -20,7 +20,7 @@ queryName :: Text -> Name
 queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namespace, namePrefix = Nothing}
 
 query :: Text -> [Node] -> Element
-query namespace nodes = Element (queryName namespace) mempty $ nodes
+query namespace = Element (queryName namespace) mempty
 
 -- | Skip to the end element of a tag, consuming everything before it.
 skipToEnd :: (Monad m, MonadThrow m) => Name -> ConduitT Event o m ()

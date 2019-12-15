@@ -79,7 +79,7 @@ initiateStream streamId sink = do
     return streamId
 
 features :: [Node] -> Element
-features nodes = Element featureName mempty nodes
+features = Element featureName mempty
   where
     featureName = Name "features"
                        (Just "http://etherx.jabber.org/streams")
