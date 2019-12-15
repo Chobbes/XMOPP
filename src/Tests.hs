@@ -131,6 +131,7 @@ cleanRunWithTestDB = do
   liftIO $ removeFileUncond (unpack db)
   runWithTestDB
 
+-- | Create a test sink from a TMVar [i].
 testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
 testSink tv = do
   e <- consume
@@ -139,6 +140,12 @@ testSink tv = do
     case e' of
       Nothing -> putTMVar tv e
       Just e' -> putTMVar tv (e' ++ e)
+
+-- | Create a sink for testing.
+newTestSink :: (MonadIO m, MonadIO mc) => m (ConduitT i o mc (), TMVar [i])
+newTestSink = do
+  tv <- liftIO newEmptyTMVarIO
+  return $ (testSink tv, tv)
 
 runTestConduit
   :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
@@ -356,8 +363,7 @@ test_feature = TestList
 -- Stream tests
 test_openStream :: IO Bool
 test_openStream = do
-  tv <- newEmptyTMVarIO :: IO (TMVar [ByteString])
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   uuid <- randomIO
   runTestConduit $ openStream uuid (yield "<anything/>" .| parseBytes def) sink
@@ -368,8 +374,7 @@ test_openStream = do
 
 test_initiateStream :: IO Bool
 test_initiateStream = do
-  tv <- newEmptyTMVarIO :: IO (TMVar [ByteString])
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   uuid <- randomIO
   runTestConduit $ initiateStream uuid sink
@@ -384,8 +389,7 @@ test_initiateStream = do
 
 test_startTLS :: IO Bool
 test_startTLS = do
-  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   runTestConduit $ startTLS (yield "<starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" .| parseBytes def) sink
   sent <- atomically $ tryTakeTMVar tv
@@ -428,8 +432,7 @@ testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakesp
 
 test_bindHandler1 :: IO Bool
 test_bindHandler1 = do
-  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   -- not an iq stanza
@@ -440,8 +443,7 @@ test_bindHandler1 = do
 
 test_bindHandler2 :: IO Bool
 test_bindHandler2 = do
-  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   -- not of type set
@@ -452,8 +454,7 @@ test_bindHandler2 = do
 
 test_bindHandler3 :: IO Bool
 test_bindHandler3 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
@@ -465,8 +466,7 @@ test_bindHandler3 = do
 
 test_bindHandler4 :: IO Bool
 test_bindHandler4 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"/></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
@@ -490,8 +490,7 @@ handlerWrapper handler a b c (Just d) = handler a b c d
 
 test_infoHandler1 :: IO Bool
 test_infoHandler1 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   -- missing query
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . handlerWrapper $ infoHandler sink)
@@ -501,8 +500,7 @@ test_infoHandler1 = do
 
 test_infoHandler2 :: IO Bool
 test_infoHandler2 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ infoHandler sink)
   sent <- atomically $ tryTakeTMVar tv
@@ -515,8 +513,7 @@ test_infoHandler2 = do
 
 test_itemsHandler1 :: IO Bool
 test_itemsHandler1 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   -- missing query
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . handlerWrapper $ itemsHandler sink)
@@ -526,8 +523,7 @@ test_itemsHandler1 = do
 
 test_itemsHandler2 :: IO Bool
 test_itemsHandler2 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ itemsHandler sink)
   sent <- atomically $ tryTakeTMVar tv
@@ -542,8 +538,7 @@ test_itemsHandler2 = do
 
 test_pingHandler1 :: IO Bool
 test_pingHandler1 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   -- missing ping
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . handlerWrapper $ pingHandler sink)
@@ -553,8 +548,7 @@ test_pingHandler1 = do
 
 test_pingHandler2 :: IO Bool
 test_pingHandler2 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ pingHandler sink)
   sent <- atomically $ tryTakeTMVar tv
@@ -569,8 +563,7 @@ test_pingHandler2 = do
 
 test_iqError :: IO Bool
 test_iqError = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . handlerWrapper $ iqError sink)
   sent <- atomically $ tryTakeTMVar tv
@@ -583,8 +576,7 @@ test_iqError = do
 
 test_iqHandler1 :: IO Bool
 test_iqHandler1 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
@@ -596,8 +588,7 @@ test_iqHandler1 = do
 
 test_iqHandler2 :: IO Bool
 test_iqHandler2 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
@@ -609,8 +600,7 @@ test_iqHandler2 = do
 
 test_iqHandler3 :: IO Bool
 test_iqHandler3 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
@@ -622,8 +612,7 @@ test_iqHandler3 = do
 
 test_iqHandler4 :: IO Bool
 test_iqHandler4 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
-  let sink = testSink tv
+  (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
