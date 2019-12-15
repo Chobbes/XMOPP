@@ -41,7 +41,6 @@ import System.Directory
 import Control.Exception
 import System.IO.Error
 import Control.Concurrent.STM.Map hiding (insert)
-import qualified Control.Concurrent.STM.Map as STC
 
 import Main hiding (main)
 import XMPP
@@ -55,7 +54,6 @@ import Concurrency
 import Logging
 import Messages
 import InternalMessaging
-import Concurrency
 import Utils
 
 
@@ -89,6 +87,9 @@ testResources = [ ["u1r1", "u1r2"]
 testUserResources :: [(User, [Text])]
 testUserResources = Prelude.zip testUsers testResources
 
+testRoster :: [(User, User)]
+testRoster = [(o, u) | o <- testUsers, u <- testUsers]
+
 -- | Set up a bogus ChanMap with test users.
 -- Given a list of (User, [Resource]) pairs.
 testChanMapSetup :: (MonadIO m, MonadReader XMPPSettings m) => [(User, [Text])] -> m ChanMap
@@ -121,7 +122,14 @@ removeFileUncond name = removeFile name `catch` handleExcept
 runWithTestDB :: (MonadIO m, MonadReader XMPPSettings m) => m ()
 runWithTestDB = do
   db <- asks xmppDB
-  liftIO $ runSqlite (xmppDB def) $ runMigration migrateAll
+  liftIO $ runSqlite db $ runMigration migrateAll
+
+-- | DELETE the DB and run with a fresh one.
+cleanRunWithTestDB :: (MonadIO m, MonadReader XMPPSettings m) => m ()
+cleanRunWithTestDB = do
+  db <- asks xmppDB
+  liftIO $ removeFileUncond (unpack db)
+  runWithTestDB
 
 testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
 testSink tv = do
@@ -165,7 +173,7 @@ testReceiveMessage = TestList
     receiveBad2 = aux "<a></a>"
 
     aux msg = join . join $
-      runConduit $ (yield msg .| parseBytes def .| receiveMessage messageBody)
+      runConduit (yield msg .| parseBytes def .| receiveMessage messageBody)
 
 -- | Create a message with UUID.
 createMessage :: Text -> Text -> Text -> UUID -> Element
@@ -182,7 +190,6 @@ createMessage to from body uuid =
           ]
 
 -- | Test sending message from one user to another.
--- Currently this is locking. Not sure why.
 testMessaging :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) =>
   User -> User -> m Bool
 testMessaging toUser fromUser = do
@@ -342,7 +349,7 @@ test_feature = TestList
 -- TODO tests for whether the client initiates or we initiate. See comments in Stream.hs for details.
 test_openStream :: IO Bool
 test_openStream = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [ByteString]))
+  tv <- newEmptyTMVarIO :: IO (TMVar [ByteString])
   let sink = testSink tv
 
   uuid <- randomIO
@@ -354,7 +361,7 @@ test_openStream = do
 
 test_initiateStream :: IO Bool
 test_initiateStream = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [ByteString]))
+  tv <- newEmptyTMVarIO :: IO (TMVar [ByteString])
   let sink = testSink tv
 
   uuid <- randomIO
@@ -364,11 +371,13 @@ test_initiateStream = do
   return $ sent ==
     Just [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
+--------------------------------------------------
 -- TLS tests
+--------------------------------------------------
 
 test_startTLS :: IO Bool
 test_startTLS = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
   let sink = testSink tv
 
   runTestConduit $ startTLS (yield "<starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" .| parseBytes def) sink
@@ -378,7 +387,9 @@ test_startTLS = do
     Just [ "<stream:features xmlns:stream=\"http://etherx.jabber.org/streams\"><starttls xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"><required xmlns=\"\"/></starttls></stream:features>"
      , "<proceed xmlns=\"urn:ietf:params:xml:ns:xmpp-tls\"/>" ]
 
+--------------------------------------------------
 -- SASL tests
+--------------------------------------------------
 
 test_authenticate1 :: MonadIO m => m Bool
 test_authenticate1 = liftIO $ runSqlite ":memory:" $ do
@@ -386,7 +397,7 @@ test_authenticate1 = liftIO $ runSqlite ":memory:" $ do
   insert $ User "grain" "asdf"
   u <- authenticate "grain" "asdf"
   return $
-    u == (Just $ User "grain" "asdf")
+    u == Just (User "grain" "asdf")
 
 test_authenticate2 :: MonadIO m => m Bool
 test_authenticate2 = liftIO $ runSqlite ":memory:" $ do
@@ -396,34 +407,41 @@ test_authenticate2 = liftIO $ runSqlite ":memory:" $ do
   return $
     u == Nothing
 
+--------------------------------------------------
 -- Iq bind tests
+--------------------------------------------------
 
 testIqInfo :: ByteString
 testIqInfo = "<iq type='get' from='romeo@montague.net/orchard' to='plays.shakespeare.lit' id='info1'> <query xmlns='http://jabber.org/protocol/disco#info'/> </iq>"
 
+
+--------------------------------------------------
+-- Testing bind handler
+--------------------------------------------------
+
 test_bindHandler1 :: IO Bool
 test_bindHandler1 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
   let sink = testSink tv
 
   cm <- atomically STC.empty
   -- not an iq stanza
-  r <- runTestConduit $ yield "<asdf/>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
+  r <- runTestConduit $ yield "<asdf/>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@localhost" sink)
   sent <- atomically $ tryTakeTMVar tv
 
-  return $ r == Nothing && sent == Nothing
+  return $ isNothing r && isNothing sent
 
 test_bindHandler2 :: IO Bool
 test_bindHandler2 = do
-  tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
+  tv <- newEmptyTMVarIO :: IO (TMVar [Element])
   let sink = testSink tv
 
   cm <- atomically STC.empty
   -- not of type set
-  r <- runTestConduit $ yield "<iq id=\"id\" type=\"get\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
+  r <- runTestConduit $ yield "<iq id=\"id\" type=\"get\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@localhost" sink)
   sent <- atomically $ tryTakeTMVar tv
 
-  return $ r == Nothing && sent == Nothing
+  return $ isNothing r && isNothing sent
 
 test_bindHandler3 :: IO Bool
 test_bindHandler3 = do
@@ -448,9 +466,11 @@ test_bindHandler4 = do
   sent <- atomically $ tryTakeTMVar tv
 
   return $ (fmap renderElement <$> sent) ==
-    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/" `append` (pack $ fromMaybe "" (T.unpack <$> r)) `append` "</jid></bind></iq>"]
+    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/" <> pack (maybe "" T.unpack r) <> "</jid></bind></iq>"]
 
+--------------------------------------------------
 -- Other Iq tests
+--------------------------------------------------
 
 -- wrap the handlers that require a to field to give a default one
 handlerWrapper :: MonadThrow m =>
@@ -552,7 +572,9 @@ test_itemsHandler2 = do
     r == Just () &&
     (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>"]
 
+--------------------------------------------------
 -- ping
+--------------------------------------------------
 
 test_pingHandler1 :: IO Bool
 test_pingHandler1 = do
@@ -563,7 +585,7 @@ test_pingHandler1 = do
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . handlerWrapper $ pingHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
-  return $ r == Nothing && sent == Nothing
+  return $ isNothing r && isNothing sent
 
 -- test_pingHandler3 :: IO Bool
 -- test_pingHandler3 = do
@@ -598,7 +620,9 @@ test_pingHandler2 = do
     r == Just () &&
     (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"result\" xmlns=\"jabber:client\"/>"]
 
+--------------------------------------------------
 -- errors
+--------------------------------------------------
 
 test_iqError :: IO Bool
 test_iqError = do
