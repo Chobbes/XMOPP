@@ -36,10 +36,6 @@ import Messages
 import Presence
 import Logging
 
--- | Construct a jid from an fqdn and a user.
-userJid :: Text -> User -> JID
-userJid fqdn u = userName u <> "@" <> fqdn
-
 --------------------------------------------------
 -- XMPP Stanzas
 --------------------------------------------------
@@ -57,7 +53,7 @@ handleClient handleStreamEvents cm ad =
 
 -- Separated for testing
 handleClient'
-   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, MonadLogger m, Show r) =>
+   :: (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, MonadLogger m) =>
    StreamEventHandler m () Void r () ->
    ChanMap ->
    ConduitT () Event m () ->

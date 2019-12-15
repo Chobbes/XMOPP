@@ -27,6 +27,8 @@ import Data.XML.Types (Event(..), Content(..))
 import Database.Persist
 import Database.Persist.Sqlite
 
+import Users
+
 --------------------------------------------------
 -- Global XMPP settings
 --------------------------------------------------
@@ -59,3 +61,7 @@ type StreamEventHandler m i o r' r = (MonadThrow m, MonadLogger m, MonadReader X
      -> ConduitT Element o m r'
      -> JID
      -> ConduitT i o m r
+
+-- | Construct a jid from an fqdn and a user.
+userJid :: Text -> User -> JID
+userJid fqdn u = userName u <> "@" <> fqdn
