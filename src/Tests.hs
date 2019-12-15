@@ -58,103 +58,7 @@ import Logging
 import Messages
 import InternalMessaging
 import Utils
-
-
---------------------------------------------------
--- Test utilities / setup
---------------------------------------------------
-
--- | Default XMPPSettings for testing.
---
--- Sets things up to use an in memory database.
-testSettings :: XMPPSettings
-testSettings = def { xmppDB = "tests.db" }
-
--- | List of test users.
-testUsers :: [User]
-testUsers = [ testUser1
-            , testUser2
-            ]
-
-testUser1 :: User
-testUser1 = User "test1" "test1pass"
-
-testUser2 :: User
-testUser2 = User "test2" "test2pass"
-
-testResources :: [[Text]]
-testResources = [ ["u1r1", "u1r2"]
-                , ["u2r1"]
-                ]
-
-testUserResources :: [(User, [Text])]
-testUserResources = Prelude.zip testUsers testResources
-
-testRoster :: [(User, User)]
-testRoster = [(o, u) | o <- testUsers, u <- testUsers]
-
--- | Set up a bogus ChanMap with test users.
--- Given a list of (User, [Resource]) pairs.
-testChanMapSetup :: (MonadIO m, MonadReader XMPPSettings m) => [(User, [Text])] -> m ChanMap
-testChanMapSetup users = do
-  dn <- asks fqdn
-  m <- liftIO . atomically $ STC.empty
-  forM_ users $ \(user, resources) ->
-    forM_ resources $ \r ->
-      allocateChannel m (userJid dn user) r
-  return m
-
-testChanMap :: (MonadIO m, MonadReader XMPPSettings m) => m ChanMap
-testChanMap = testChanMapSetup testUserResources
-
--- | Set up DB with test users.
-testDBSetup
-  :: (MonadIO m, MonadReader XMPPSettings m) => m ()
-testDBSetup = do
-  db <- asks xmppDB
-  liftIO . runSqlite db $ insertUsers testUsers
-
--- | Remove a file unconditionally.
-removeFileUncond :: FilePath -> IO ()
-removeFileUncond name = removeFile name `catch` handleExcept
-  where handleExcept e
-          | isDoesNotExistError e = return ()
-          | otherwise = throwIO e
-
--- | TODO: unfinished
-runWithTestDB :: (MonadIO m, MonadReader XMPPSettings m) => m ()
-runWithTestDB = do
-  db <- asks xmppDB
-  liftIO $ runSqlite db $ runMigration migrateAll
-
--- | DELETE the DB and run with a fresh one.
-cleanRunWithTestDB :: (MonadIO m, MonadReader XMPPSettings m) => m ()
-cleanRunWithTestDB = do
-  db <- asks xmppDB
-  liftIO $ removeFileUncond (unpack db)
-  runWithTestDB
-  testDBSetup
-
--- | Create a test sink from a TMVar [i].
-testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
-testSink tv = do
-  e <- consume
-  liftIO $ atomically $ do
-    e' <- tryTakeTMVar tv
-    case e' of
-      Nothing -> putTMVar tv e
-      Just e' -> putTMVar tv (e' ++ e)
-
--- | Create a sink for testing.
-newTestSink :: (MonadIO m, MonadIO mc) => m (ConduitT i o mc (), TMVar [i])
-newTestSink = do
-  tv <- liftIO newEmptyTMVarIO
-  return (testSink tv, tv)
-
-runTestConduit
-  :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
-runTestConduit = liftIO . runNoLoggingT . flip runReaderT testSettings . runConduit
-
+import TestUtils
 
 --------------------------------------------------
 -- Test messaging
@@ -744,3 +648,16 @@ testPlainAuth user = do
   let source = sourceList (elementToEvents (toXMLElement authMsg))
   auth <- plainAuth source sink
   return $ Just user == auth
+
+-- | Test handleClient with some messages.
+testHandleClient ::
+  (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, MonadLogger m) =>
+  User -> m ()
+testHandleClient user = do
+  (bytesink, tv) <- newTestSink
+  (sink, chan) <- forkSink bytesink
+  cm <- testChanMap
+
+  let authMsg = createAuthStanza user
+  let source = sourceList (elementToEvents (toXMLElement authMsg))
+  handleClient' handleStreamDefault cm source sink bytesink
