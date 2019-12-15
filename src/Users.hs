@@ -39,4 +39,4 @@ insertUsers
       AtLeastOneUniqueKey record,
       PersistEntityBackend record ~ BaseBackend backend) =>
      t record -> ReaderT backend m ()
-insertUsers users = mapM_ insertBy users
+insertUsers = mapM_ insertBy

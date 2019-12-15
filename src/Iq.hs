@@ -54,7 +54,7 @@ bind jid = Element bindName mempty [NodeElement bindElement]
 receiveIqBind :: MonadThrow m =>
   (Text -> Text -> ConduitT Event o m (Maybe Text)) -> ConduitT Event o m (Maybe Text)
 receiveIqBind handler =
-  join <$> (tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") $ uncurry handler)
+  join <$> tag' "iq" ((,) <$> requireAttr "id" <*> requireAttr "type") (uncurry handler)
 
 bindHandler :: (MonadThrow m, PrimMonad m, MonadUnliftIO m, MonadLogger m) =>
   ChanMap ->
@@ -114,19 +114,21 @@ iqHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, MonadUnli
   Text ->
   Text ->
   Text ->
-  (Maybe Text) ->
+  Maybe Text ->
   ConduitT Event o m (Maybe r)
 iqHandler cm sink i t from (Just to) =
   choose $ (\f -> f sink i t from to) <$>
   [ infoHandler
   , itemsHandler
   , pingHandler
-  , iqError ]
+  , iqError
+  ]
 
 iqHandler cm sink i t from Nothing =
   choose $ (\f -> f sink i t from) <$>
   [ rosterHandler
-  , (\sink i t from -> iqError sink i t from (fqdn def))]
+  , \sink i t from -> iqError sink i t from (fqdn def)
+  ]
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
@@ -206,7 +208,7 @@ iqError :: (MonadThrow m, MonadLogger m) =>
   ConduitT Event o m (Maybe r)
 iqError sink i t from to = do
   skipToEnd iqName
-  logDebugN $ "Cannot handle IQ stanza."
+  logDebugN "Cannot handle IQ stanza."
   r <- yield errorElem .| sink
   return $ Just r
   where

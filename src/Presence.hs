@@ -51,24 +51,22 @@ presenceHandler cm from t = do
       db <- asks xmppDB
       roster <- liftIO $ runSqlite db $ getRoster ownerName
       -- Send our presence to our roster.
-      forM (rosterName <$> roster) (\jid -> sendToJidAll cm jid $ presenceElement from jid)
+      forM_ (rosterName <$> roster) (\jid -> sendToJidAll cm jid $ presenceElement from jid)
       -- Send the presence of our roster to us.
-      if t /= Just "unavailable"
-        then void $ forM (rosterName <$> roster)
-             (\jid ->
-                case nameFromJid jid of
+      when (t /= Just "unavailable") $
+        forM_ (rosterName <$> roster)
+        (\jid ->
+            case nameFromJid jid of
+              Nothing -> return ()
+              Just name -> do
+                roster <- liftIO $ runSqlite db $ getRoster name
+                r <- liftIO . atomically $ do
+                  mm <- STC.lookup jid cm
+                  return $ void mm
+                case r of
                   Nothing -> return ()
-                  Just name -> do
-                    roster <- liftIO $ runSqlite db $ getRoster name
-                    r <- liftIO . atomically $ do
-                      mm <- STC.lookup jid cm
-                      return $ void mm
-                    case r of
-                      Nothing -> return ()
-                      Just _ -> if (elem (name <> "@" <> (fqdn def)) (rosterName <$> roster))
-                                then (sendToJidAll cm ownerJid $ presenceElement jid from)
-                                else return ())
-        else return ()
+                  Just _ -> when ((name <> "@" <> fqdn def) `elem` (rosterName <$> roster)) $
+                              sendToJidAll cm ownerJid $ presenceElement jid from)
       return $ Just ()
     _ -> return Nothing
   where
