@@ -95,7 +95,6 @@ handleClient' handleStreamEvents cm source sink bytesink = runConduit $ do
           -- Free channel. TODO: look into resourceT
           freeResource cm jid resource
 
-      closeStream bytesink
       logDebugN $ "End of stream for: " <> jid
 
 -- | Default handler for stream events (messaging, iq, and presence).

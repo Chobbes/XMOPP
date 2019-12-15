@@ -67,7 +67,7 @@ bindHandler cm jid sink i t =
   if t /= "set"
   then do
     logErrorN $ "Expected iq stanza with type = set for resource binding, but type is " <> t <> "."
-    skipToEnd "iq"
+    skipToEnd
     return Nothing
   else join <$> tagIgnoreAttrs "{urn:ietf:params:xml:ns:xmpp-bind}bind" doBind
   where
@@ -208,7 +208,7 @@ iqError :: (MonadThrow m, MonadLogger m) =>
   Text ->
   ConduitT Event o m (Maybe r)
 iqError sink i t from to = do
-  skipToEnd iqName
+  skipToEnd
   logDebugN "Cannot handle IQ stanza."
   r <- yield errorElem .| sink
   return $ Just r

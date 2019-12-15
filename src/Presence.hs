@@ -31,7 +31,7 @@ presenceHandler :: (MonadThrow m,
                     MonadUnliftIO m) =>
   ChanMap -> Text -> Maybe Text -> ConduitT Event o m (Maybe ())
 presenceHandler cm from t = do
-  skipToEnd presenceName -- We don't handle anything besides basic presence.
+  skipToEnd -- We don't handle anything besides basic presence.
   case jidFromResource from of
     Nothing -> return $ Just ()
     Just jid -> updatePresence cm jid (t == Just "unavailable")

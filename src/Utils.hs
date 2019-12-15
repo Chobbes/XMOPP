@@ -25,15 +25,17 @@ query namespace = Element (queryName namespace) mempty
 presenceName :: Name
 presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:client", namePrefix = Nothing}
 
--- | Skip to the end element of a tag, consuming everything before it.
-skipToEnd :: (Monad m, MonadThrow m) => Name -> ConduitT Event o m ()
-skipToEnd name = do
+-- | Skip to the next exposed end element, consuming everything before it.
+-- Useful for tag'.
+-- Assumes the begin element has already been consumed.
+skipToEnd :: MonadThrow m => ConduitT Event o m ()
+skipToEnd = do
   e <- peek
   case e of
     Nothing -> return ()
     Just e  ->
-      if e == EventEndElement name
-      then return ()
-      else do
-        ignoreAnyTreeContent
-        skipToEnd name
+      case e of
+        EventEndElement _ -> return ()
+        _ -> do
+          ignoreAnyTreeContent
+          skipToEnd
