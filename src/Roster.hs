@@ -54,13 +54,14 @@ rosterHandler cm sink i t from =
   where
     rosterName = queryName rosterNamespace
     itemName = Name "item" (Just rosterNamespace) Nothing
-    itemHandler cm owner =
+    itemHandler cm owner = do
+      db <- asks xmppDB
+      fqdn <- asks fqdn
       case t of
         "get" -> do
-          db <- asks xmppDB
           do
             roster <- liftIO $ runSqlite db $ getRoster owner
-            r <- yield (iq i "result" from (fqdn def)
+            r <- yield (iq i "result" from fqdn
                         [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
             return $ Just r
         "set" -> do
@@ -71,7 +72,6 @@ rosterHandler cm sink i t from =
           case attrs of
             Nothing -> return Nothing
             Just (jid, remove) -> do
-              db <- asks xmppDB
               r <- liftIO $ runSqlite db $ if remove
                                            then removeRoster owner jid
                                            else addRoster owner jid
@@ -80,8 +80,7 @@ rosterHandler cm sink i t from =
                   logDebugN $ "Roster error: user not found: " <> owner
                   return Nothing
                 Just _ -> do
-                  r <- yield (iq i "result" from (fqdn def) []) .| sink
-                  fqdn <- asks fqdn
+                  r <- yield (iq i "result" from fqdn []) .| sink
                   let ownerJid = owner <> "@" <> fqdn
                   if remove
                     then do -- Their roster may still contain us.

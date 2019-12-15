@@ -124,11 +124,12 @@ iqHandler cm sink i t from (Just to) =
   , iqError
   ]
 
-iqHandler cm sink i t from Nothing =
+iqHandler cm sink i t from Nothing = do
+  fqdn <- asks fqdn
   choose $ (\f -> f cm sink i t from) <$>
-  [ rosterHandler
-  , \_ sink i t from -> iqError sink i t from (fqdn def)
-  ]
+    [ rosterHandler
+    , \_ sink i t from -> iqError sink i t from fqdn
+    ]
 
 infoNamespace :: Text
 infoNamespace = "http://jabber.org/protocol/disco#info"
