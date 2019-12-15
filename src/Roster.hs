@@ -59,7 +59,6 @@ rosterHandler cm sink i t from =
       fqdn <- asks fqdn
       case t of
         "get" -> do
-          do
             roster <- liftIO $ runSqlite db $ getRoster owner
             r <- yield (iq i "result" from fqdn
                         [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
@@ -148,8 +147,8 @@ presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:cl
 -- Handles the case when the presence of a resource has changed.
 updatePresence :: (MonadReader XMPPSettings m, MonadIO m, MonadLogger m) =>
   ChanMap -> JID -> Bool -> m (Maybe ())
-updatePresence cm jid offline = do
-  case (nameFromJid jid) of
+updatePresence cm jid offline =
+  case nameFromJid jid of
     Just name -> do
       -- Update the flag in the ChanMap.
       liftIO . atomically $ do
@@ -160,7 +159,7 @@ updatePresence cm jid offline = do
       -- Share presence with other users.
       db <- asks xmppDB
       roster <- liftIO $ runSqlite db $ getRoster name
-      forM (rosterName <$> roster) $ updatePresenceTo cm jid offline
+      forM_ (rosterName <$> roster) $ updatePresenceTo cm jid offline
       return $ Just ()
     _ -> return Nothing
 
