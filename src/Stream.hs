@@ -36,6 +36,7 @@ streamName = Name {nameLocalName = "stream", nameNamespace = Just "http://etherx
 awaitStream :: MonadThrow m => ConduitT Event o m (Maybe Event)
 awaitStream = awaitName streamName
 
+-- | Start of stream response.
 streamRespHeader :: Monad m => Text -> Text -> UUID -> ConduitT i Event m ()
 streamRespHeader from lang streamId =
   yield $ EventBeginElement streamName attrs
@@ -44,6 +45,11 @@ streamRespHeader from lang streamId =
                 , at "id" (toText streamId)
                 , (Name "lang" (Just "xml") (Just "xml"), [ContentText lang]) ]
         at name content = (Name name Nothing Nothing, [ContentText content])
+
+-- | End of stream.
+streamEndHeader :: Monad m => ConduitT i Event m ()
+streamEndHeader =
+  yield $ EventEndElement streamName
 
 -- TODO: right now we only handle clients opening the stream, since the message sent when opening the stream doesn't include the UUID. These functions handle replying to the client who sends the first message.
 -- | Open a stream with a random UUID
@@ -77,6 +83,12 @@ initiateStream streamId sink = do
     streamRespHeader fqdn "en" streamId .| XR.renderBytes def .| sink
     logDebugN "Done stream response..."
     return streamId
+
+-- | Close a stream.
+closeStream :: (PrimMonad m, MonadReader XMPPSettings m, MonadLogger m) =>
+  ConduitT BS.ByteString o m r -> ConduitT i o m r
+closeStream sink = streamEndHeader .| XR.renderBytes def .| sink
+
 
 features :: [Node] -> Element
 features = Element featureName mempty

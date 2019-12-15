@@ -89,11 +89,13 @@ handleClient' handleStreamEvents cm source sink bytesink = runConduit $ do
       case resource of
         Nothing       -> logDebugN $ "Could not bind resource for: " <> jid
         Just resource -> do
-          handleStreamEvents cm source sink jid
+          catchC (handleStreamEvents cm source sink jid) $
+            \e -> logErrorN ("Exception for jid: " <> jid <> resource <> (pack . show) (e :: SomeException))
 
           -- Free channel. TODO: look into resourceT
           freeResource cm jid resource
 
+      closeStream bytesink
       logDebugN $ "End of stream for: " <> jid
 
 -- | Default handler for stream events (messaging, iq, and presence).
