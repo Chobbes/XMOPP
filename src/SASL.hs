@@ -56,7 +56,7 @@ plainAuth source sink = do
   auth <- source .| awaitAuth
   case auth of
     Just (user, pass) -> do
-      db <- asks xmppDB -- TODO move db to an argument for testing?
+      db <- asks xmppDB
       liftIO $ runSqlite db $ authenticate user pass
     _ -> return Nothing
 
