@@ -9,7 +9,11 @@ import Control.Monad.Reader
 import Control.Monad.IO.Unlift
 import Text.XML.Stream.Parse
 import Data.XML.Types (Event(..))
+import Database.Persist.Sqlite
+import GHC.Conc (atomically)
+import qualified Control.Concurrent.STM.Map as STC
 
+import Users
 import XMPP
 import Roster
 import Utils
@@ -32,3 +36,22 @@ presenceHandler cm from t = do
     Nothing -> return $ Just ()
     Just jid -> updatePresence cm jid (t == Just "unavailable")
   return $ Just ()
+
+-- Handles the case when the presence of a resource has changed.
+updatePresence :: (MonadReader XMPPSettings m, MonadIO m, MonadLogger m) =>
+  ChanMap -> JID -> Bool -> m (Maybe ())
+updatePresence cm jid offline =
+  case nameFromJid jid of
+    Just name -> do
+      -- Update the flag in the ChanMap.
+      liftIO . atomically $ do
+        mm <- STC.lookup jid cm
+        case mm of
+          Just (xs, _, m) -> STC.insert jid (xs, not offline, m) cm
+          _ -> return ()
+      -- Share presence with other users.
+      db <- asks xmppDB
+      roster <- liftIO $ runSqlite db $ getRoster name
+      forM_ (rosterName <$> roster) $ updatePresenceTo cm jid offline
+      return $ Just ()
+    _ -> return Nothing

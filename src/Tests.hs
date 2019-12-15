@@ -391,7 +391,7 @@ test_startTLS = do
 -- SASL tests
 --------------------------------------------------
 
-test_authenticate1 :: MonadIO m => m Bool
+test_authenticate1 :: IO Bool
 test_authenticate1 = liftIO $ runSqlite ":memory:" $ do
   runMigrationSilent migrateAll
   insert $ User "grain" "asdf"
@@ -399,7 +399,7 @@ test_authenticate1 = liftIO $ runSqlite ":memory:" $ do
   return $
     u == Just (User "grain" "asdf")
 
-test_authenticate2 :: MonadIO m => m Bool
+test_authenticate2 :: IO Bool
 test_authenticate2 = liftIO $ runSqlite ":memory:" $ do
   runMigrationSilent migrateAll
   insert $ User "grain" "1234"
@@ -492,28 +492,6 @@ test_infoHandler1 = do
 
   return $ r == Nothing && sent == Nothing
 
--- test_infoHandler3 :: IO Bool
--- test_infoHandler3 = do
---   tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
---   let sink = testSink tv
-
---   -- type is not get
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ infoHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
-
--- test_infoHandler4 :: IO Bool
--- test_infoHandler4 = do
---   tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
---   let sink = testSink tv
-
---   -- wrong query namespace
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ infoHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
-
 test_infoHandler2 :: IO Bool
 test_infoHandler2 = do
   tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
@@ -538,27 +516,6 @@ test_itemsHandler1 = do
   sent <- atomically $ tryTakeTMVar tv
 
   return $ r == Nothing && sent == Nothing
-
--- test_itemsHandler3 :: IO Bool
--- test_itemsHandler3 = do
---   tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
---   let sink = testSink tv
-
---   -- type is not get
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"result\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ itemsHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
-
--- test_itemsHandler4 :: IO Bool
--- test_itemsHandler4 = do
---   tv <- (newEmptyTMVarIO :: IO (TMVar [Element]))
---   let sink = testSink tv
-
---   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq . handlerWrapper $ itemsHandler sink)
---   sent <- atomically $ tryTakeTMVar tv
-
---   return $ r == Nothing && sent == Nothing
 
 test_itemsHandler2 :: IO Bool
 test_itemsHandler2 = do

@@ -91,6 +91,7 @@ rosterHandler cm sink i t from =
         _ ->
           return Nothing
 
+isPresent :: MonadIO m => ChanMap -> JID -> m Bool
 isPresent cm jid = liftIO . atomically $ do
   mm <- STC.lookup jid cm
   case mm of
@@ -115,9 +116,9 @@ getRoster name = do
     Just (Entity userId user) -> fmap entityVal <$> selectList [RosterOwner ==. userId] []
 
 removeRoster :: (MonadIO m,
-              PersistUniqueRead backend,
-              PersistQueryWrite backend,
-              BaseBackend backend ~ SqlBackend) =>
+                 PersistUniqueRead backend,
+                 PersistQueryWrite backend,
+                 BaseBackend backend ~ SqlBackend) =>
      JID -> JID -> ReaderT backend m (Maybe Text)
 removeRoster owner jid = do
   ownerEntity <- getBy (UniqueName owner)
@@ -140,28 +141,6 @@ addRoster owner name = do
     Just (Entity ownerId _) -> do
       insert (Roster ownerId name)
       return $ Just name
-
-presenceName :: Name
-presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:client", namePrefix = Nothing}
-
--- Handles the case when the presence of a resource has changed.
-updatePresence :: (MonadReader XMPPSettings m, MonadIO m, MonadLogger m) =>
-  ChanMap -> JID -> Bool -> m (Maybe ())
-updatePresence cm jid offline =
-  case nameFromJid jid of
-    Just name -> do
-      -- Update the flag in the ChanMap.
-      liftIO . atomically $ do
-        mm <- STC.lookup jid cm
-        case mm of
-          Just (xs, _, m) -> STC.insert jid (xs, not offline, m) cm
-          _ -> return ()
-      -- Share presence with other users.
-      db <- asks xmppDB
-      roster <- liftIO $ runSqlite db $ getRoster name
-      forM_ (rosterName <$> roster) $ updatePresenceTo cm jid offline
-      return $ Just ()
-    _ -> return Nothing
 
 -- Exchange presence information between jid and jid'. jid is the user
 -- whose presence information just changed.

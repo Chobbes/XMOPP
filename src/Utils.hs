@@ -22,6 +22,9 @@ queryName namespace = Name {nameLocalName = "query", nameNamespace = Just namesp
 query :: Text -> [Node] -> Element
 query namespace = Element (queryName namespace) mempty
 
+presenceName :: Name
+presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:client", namePrefix = Nothing}
+
 -- | Skip to the end element of a tag, consuming everything before it.
 skipToEnd :: (Monad m, MonadThrow m) => Name -> ConduitT Event o m ()
 skipToEnd name = do
