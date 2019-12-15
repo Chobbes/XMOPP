@@ -148,7 +148,7 @@ infoHandler sink i t from to =
     q <- tagNoAttr (matching (==infoQueryName)) content
     case q of
       Just _ -> do
-        r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "cat" "type" "name", feature infoNamespace, feature itemsNamespace, feature pingNamespace, feature rosterNamespace])]) .| sink
+        r <- yield (iq i "result" from to [NodeElement (query infoNamespace $ NodeElement <$> [identity "server" "im" "HAXMPP", feature infoNamespace, feature itemsNamespace, feature pingNamespace, feature rosterNamespace])]) .| sink
         return $ Just r
       Nothing -> return Nothing
   where
@@ -214,13 +214,3 @@ iqError sink i t from to = do
   return $ Just r
   where
     errorElem = iq i "error" from to []
-
-data IqStanza = MkIq { iqId   :: Text
-                     , iqType :: Text
-                     , iqContents :: [Event]  -- Change to a full XML document??
-                     }
-                deriving (Eq, Show)
-
-baseIqHandler i t = do
-  c <- void takeAnyTreeContent .| consume
-  return $ MkIq i t c

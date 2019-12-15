@@ -27,13 +27,13 @@ import Users
 
 nameFromJid :: JID -> Maybe Text
 nameFromJid jid = case splitOn "@" jid of
-                    [] -> Nothing
-                    (name:_) -> Just name
+                    [name, _] -> Just name
+                    _ -> Nothing
 
 jidFromResource :: XMPPResource -> Maybe JID
 jidFromResource res = case splitOn "/" res of
-                        [] -> Nothing
-                        (jid:_) -> Just jid
+                        [jid, _] -> Just jid
+                        _ -> Nothing
 
 rosterNamespace :: Text
 rosterNamespace = "jabber:iq:roster"
@@ -61,7 +61,7 @@ rosterHandler cm sink i t from =
         "get" -> do
             roster <- liftIO $ runSqlite db $ getRoster owner
             r <- yield (iq i "result" from fqdn
-                        [NodeElement $ query rosterNamespace $ rosterItems roster]) .| sink
+                        [NodeElement $ query rosterNamespace $ NodeElement <$> rosterItems roster]) .| sink
             return $ Just r
         "set" -> do
           attrs <- tag'
@@ -98,8 +98,8 @@ isPresent cm jid = liftIO . atomically $ do
     Just (_, True, _) -> return True
     _ -> return False
 
-rosterItems :: [Roster] -> [Node]
-rosterItems = fmap (\roster -> NodeElement $ Element
+rosterItems :: [Roster] -> [Element]
+rosterItems = fmap (\roster -> Element
                                "item"
                                (M.fromList [("jid", rosterName roster)])
                                [])
