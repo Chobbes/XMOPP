@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 module TestUtils where
 
@@ -173,4 +174,3 @@ createMessage to from body uuid =
           , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
           , NodeElement (Element "{jabber:client}thread" mempty [NodeContent "testThreadId"])
           ]
-

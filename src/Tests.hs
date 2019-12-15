@@ -565,6 +565,7 @@ test_iqHandler5 = do
 -- roster
 --------------------------------------------------
 
+-- cases where type="get"
 test_rosterHandler1 :: IO Bool
 test_rosterHandler1 = do
   (sink, tv) <- newTestSink
@@ -575,20 +576,148 @@ test_rosterHandler1 = do
 
   return $ isNothing r && isNothing sent
 
-test_rosterHandler2 :: IO Bool
+test_rosterHandler2 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
 test_rosterHandler2 = do
   (sink, tv) <- newTestSink
-  cm <- atomically STC.empty
-
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"name@domain/res\"><query xmlns=\"jabber:iq:roster\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
-  sent <- atomically $ tryTakeTMVar tv
-
-  print (fmap renderElement <$> sent)
+  cm <- liftIO $ atomically STC.empty
+  r <- liftIO $ runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"name@domain/res\"><query xmlns=\"jabber:iq:roster\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  fqdn <- asks fqdn
 
   return $
     r == Just () &&
-    -- (fmap renderElement <$> sent) == Just ["<iq from=\"" <> (encodeUtf8 $ fqdn def) <> "\" id=\"id
-    True
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"name@domain/res\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"jabber:iq:roster\"/></iq>"]
+
+test_rosterHandler3 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
+test_rosterHandler3 = do
+  (sink, tv) <- newTestSink
+  cm <- liftIO $ atomically STC.empty
+  db <- asks xmppDB
+  liftIO $ runSqlite db $ do
+    addRoster "test2" "test1@domain"
+    addRoster "test1" "test2@domain"
+    addRoster "test1" "test3@domain"
+  r <- liftIO $ runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"test1@domain/res\"><query xmlns=\"jabber:iq:roster\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  fqdn <- asks fqdn
+
+  return $
+    r == Just () &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"test1@domain/res\" type=\"result\" xmlns=\"jabber:client\"><query xmlns=\"jabber:iq:roster\"><item jid=\"test2@domain\" xmlns=\"\"/><item jid=\"test3@domain\" xmlns=\"\"/></query></iq>"]
+
+-- cases where type="set"
+test_rosterHandler4 :: IO Bool
+test_rosterHandler4 = do
+  (sink, tv) <- newTestSink
+  cm <- atomically STC.empty
+  -- no query
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"set\" from=\"name@domain/res\"/>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ isNothing r && isNothing sent
+
+-- Adding to roster
+
+test_rosterHandler5 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
+test_rosterHandler5 = do
+  (sink, tv) <- newTestSink
+  cm <- testChanMap
+  db <- asks xmppDB
+  fqdn <- asks fqdn
+  liftIO $ runSqlite db $ do
+    addRoster "test2" ("test1@" <> fqdn)
+  -- test1 adds test2 to their roster. test2 already has test1 in their roster.
+  r <- liftIO $ runTestConduit $ yield ("<iq xmlns=\"jabber:client\" id=\"id\" type=\"set\" from=\"test1@domain/res\"><query xmlns=\"jabber:iq:roster\"><item jid=\"test2@" <> encodeUtf8 fqdn <> "\"/></query></iq>") .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  roster <- liftIO $ runSqlite db $ getRoster "test1"
+  -- Fetch messages of test1 and test2
+  channels1 <- liftIO . atomically $ getJidChannels cm ("test1" <> "@" <> fqdn)
+  elems1 <- liftIO . atomically $ readAllChannels channels1
+  channels2 <- liftIO . atomically $ getJidChannels cm ("test2" <> "@" <> fqdn)
+  elems2 <- liftIO . atomically $ readAllChannels channels2
+
+  return $
+    r == Just () &&
+    (rosterName <$> roster) == ["test2@" <> fqdn] &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"test1@domain/res\" type=\"result\" xmlns=\"jabber:client\"/>"] &&
+    (fmap renderElement <$> elems1) == [Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" xmlns=\"jabber:client\"/>", Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" xmlns=\"jabber:client\"/>"] && -- 2 resources, so 2 copies
+    (fmap renderElement <$> elems2) == [Just "<presence from=\"test1@localhost\" to=\"test2@localhost\" xmlns=\"jabber:client\"/>"]
+
+test_rosterHandler6 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
+test_rosterHandler6 = do
+  (sink, tv) <- newTestSink
+  cm <- testChanMap
+  db <- asks xmppDB
+  fqdn <- asks fqdn
+  -- test1 adds test2 to their roster. test2 doesn't have test1 in their roster.
+  r <- liftIO $ runTestConduit $ yield ("<iq xmlns=\"jabber:client\" id=\"id\" type=\"set\" from=\"test1@domain/res\"><query xmlns=\"jabber:iq:roster\"><item jid=\"test2@" <> encodeUtf8 fqdn <> "\"/></query></iq>") .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  roster <- liftIO $ runSqlite db $ getRoster "test1"
+  -- Fetch messages of test1 and test2
+  channels1 <- liftIO . atomically $ getJidChannels cm ("test1" <> "@" <> fqdn)
+  elems1 <- liftIO . atomically $ readAllChannels channels1
+  channels2 <- liftIO . atomically $ getJidChannels cm ("test2" <> "@" <> fqdn)
+  elems2 <- liftIO . atomically $ readAllChannels channels2
+
+  return $
+    r == Just () &&
+    (rosterName <$> roster) == ["test2@" <> fqdn] &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"test1@domain/res\" type=\"result\" xmlns=\"jabber:client\"/>"] &&
+    (fmap renderElement <$> elems1) == [Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>", Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"] && -- 2 resources, so 2 copies
+    (fmap renderElement <$> elems2) == [Just "<presence from=\"test1@localhost\" to=\"test2@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"]
+
+-- Removing from roster
+
+test_rosterHandler7 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
+test_rosterHandler7 = do
+  (sink, tv) <- newTestSink
+  cm <- testChanMap
+  db <- asks xmppDB
+  fqdn <- asks fqdn
+  liftIO $ runSqlite db $ do
+    addRoster "test1" ("test2@" <> fqdn)
+    addRoster "test2" ("test1@" <> fqdn)
+  -- test1 removes test2 from their roster. test2 has test1 in their roster.
+  r <- liftIO $ runTestConduit $ yield ("<iq xmlns=\"jabber:client\" id=\"id\" type=\"set\" from=\"test1@" <> encodeUtf8 fqdn <> "/res\"><query xmlns=\"jabber:iq:roster\"><item subscription=\"remove\" jid=\"test2@" <> encodeUtf8 fqdn <> "\"/></query></iq>") .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  roster <- liftIO $ runSqlite db $ getRoster "test1"
+  -- Fetch messages of test1 and test2
+  channels1 <- liftIO . atomically $ getJidChannels cm ("test1" <> "@" <> fqdn)
+  elems1 <- liftIO . atomically $ readAllChannels channels1
+  channels2 <- liftIO . atomically $ getJidChannels cm ("test2" <> "@" <> fqdn)
+  elems2 <- liftIO . atomically $ readAllChannels channels2
+
+  return $
+    r == Just () &&
+    roster == [] &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"test1@" <> encodeUtf8 fqdn <> "/res\" type=\"result\" xmlns=\"jabber:client\"/>"] &&
+    (fmap renderElement <$> elems1) == [Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>", Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"] && -- 2 resources, so 2 copies
+    (fmap renderElement <$> elems2) == [Just "<presence from=\"test1@localhost\" to=\"test2@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"]
+
+test_rosterHandler8 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
+test_rosterHandler8 = do
+  (sink, tv) <- newTestSink
+  cm <- testChanMap
+  db <- asks xmppDB
+  fqdn <- asks fqdn
+  liftIO $ runSqlite db $ do
+    addRoster "test1" ("test2@" <> fqdn)
+  -- test1 removes test2 from their roster. test2 doesn't have test1 in their roster.
+  r <- liftIO $ runTestConduit $ yield ("<iq xmlns=\"jabber:client\" id=\"id\" type=\"set\" from=\"test1@" <> encodeUtf8 fqdn <> "/res\"><query xmlns=\"jabber:iq:roster\"><item subscription=\"remove\" jid=\"test2@" <> encodeUtf8 fqdn <> "\"/></query></iq>") .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  roster <- liftIO $ runSqlite db $ getRoster "test1"
+  -- Fetch messages of test1 and test2
+  channels1 <- liftIO . atomically $ getJidChannels cm ("test1" <> "@" <> fqdn)
+  elems1 <- liftIO . atomically $ readAllChannels channels1
+  channels2 <- liftIO . atomically $ getJidChannels cm ("test2" <> "@" <> fqdn)
+  elems2 <- liftIO . atomically $ readAllChannels channels2
+
+  return $
+    r == Just () &&
+    roster == [] &&
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"test1@" <> encodeUtf8 fqdn <> "/res\" type=\"result\" xmlns=\"jabber:client\"/>"] &&
+    (fmap renderElement <$> elems1) == [Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>", Just "<presence from=\"test2@localhost\" to=\"test1@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"] && -- 2 resources, so 2 copies
+    (fmap renderElement <$> elems2) == [Just "<presence from=\"test1@localhost\" to=\"test2@localhost\" type=\"unavailable\" xmlns=\"jabber:client\"/>"]
 
 test_isPresent :: IO Bool
 test_isPresent = return True
@@ -624,8 +753,8 @@ main = do
   runTestTT unitTests
   runTests ioTests
   where
-    ioTests = [ (runXMPPNoDB . runConduit $ test_initiateStream, "initiateStream")
-              , (runXMPPNoDB . runConduit $ test_openStream, "openStream")
+    ioTests = [ (runXMPPNoDB test_initiateStream, "initiateStream")
+              , (runXMPPNoDB test_openStream, "openStream")
               , (test_startTLS, "startTLS")
               , (test_authenticate1, "authenticate 1")
               , (test_authenticate2, "authenticate 2")
@@ -645,9 +774,15 @@ main = do
               , (test_iqHandler2, "iqHandler 2")
               , (test_iqHandler3, "iqHandler 3")
               , (test_iqHandler4, "iqHandler 4")
-              , (runXMPPNoDB . runConduit $ test_iqHandler5, "iqHandler 5")
-              , (test_rosterHandler1, "rosterhandler1")
-              , (test_rosterHandler2, "rosterhandler2")
+              , (runXMPPNoDB test_iqHandler5, "iqHandler 5")
+              , (test_rosterHandler1, "rosterHandler1")
+              , (runXMPPNoDB test_rosterHandler2, "rosterHandler2")
+              , (runXMPP test_rosterHandler3, "rosterHandler3")
+              , (test_rosterHandler4, "rosterHandler4")
+              , (runXMPP test_rosterHandler5, "rosterHandler5")
+              , (runXMPP test_rosterHandler6, "rosterHandler6")
+              , (runXMPP test_rosterHandler7, "rosterHandler7")
+              , (runXMPP test_rosterHandler8, "rosterHandler8")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 1 to 2")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")
               , (runXMPP . runConduit $ testPlainAuth testUser1, "Test authentication of user 1")
@@ -682,11 +817,10 @@ main = do
       ]
 
 
---    runXMPP :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) => m Bool -> m1 bool
     runTests [] = return ()
     runTests ((t, name):ts) = do
       result <- t
-      print $ name ++ (if result then " passed" else " failed *******************")
+      print $ name ++ (if result then " passed" else " failed **************************************")
       runTests ts
 
 runXMPPNoDB :: MonadIO m => ReaderT XMPPSettings (NoLoggingT m) a -> m a
@@ -701,9 +835,6 @@ runXMPP xmpp = runNoLoggingT . flip runReaderT testSettings $ do
 --------------------------------------------------
 -- Misc test stuff
 --------------------------------------------------
-
-testiq :: ByteString
-testiq = "<iq id=\"5ba62e81-cbbd-45cc-a20a-5abca191b55f\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>gajim.CD9NEZ09</resource></bind></iq>"
 
 eventConduitTest sink = do
   chan <- liftIO newTMChanIO

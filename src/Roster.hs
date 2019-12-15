@@ -108,7 +108,7 @@ getRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistQueryRead backend,
               BaseBackend backend ~ SqlBackend) =>
-  JID -> ReaderT backend m [Roster]
+  Text -> ReaderT backend m [Roster]
 getRoster name = do
   userEntity <- getBy (UniqueName name)
   case userEntity of
@@ -119,7 +119,7 @@ removeRoster :: (MonadIO m,
                  PersistUniqueRead backend,
                  PersistQueryWrite backend,
                  BaseBackend backend ~ SqlBackend) =>
-     JID -> JID -> ReaderT backend m (Maybe Text)
+     Text -> JID -> ReaderT backend m (Maybe Text)
 removeRoster owner jid = do
   ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
@@ -133,14 +133,14 @@ addRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistStoreWrite backend,
               BaseBackend backend ~ SqlBackend) =>
-     JID -> JID -> ReaderT backend m (Maybe Text)
-addRoster owner name = do
+  Text -> JID -> ReaderT backend m (Maybe Text)
+addRoster owner jid = do
   ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
     Nothing -> return Nothing
     Just (Entity ownerId _) -> do
-      insert (Roster ownerId name)
-      return $ Just name
+      insert (Roster ownerId jid)
+      return $ Just jid
 
 -- Exchange presence information between jid and jid'. jid is the user
 -- whose presence information just changed.
