@@ -48,8 +48,9 @@ type XMPPMonad    = ReaderT XMPPSettings (LoggingT IO)
 
 type JID          = Text
 type XMPPResource = Text
+type Presence     = Bool
 
-type ChanMap      = Map JID ([XMPPResource], Map XMPPResource (TMChan Element))
+type ChanMap      = Map JID ([XMPPResource], Presence, Map XMPPResource (TMChan Element))
 
 type StreamEventHandler m i o r' r = (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m,
       MonadUnliftIO m) =>

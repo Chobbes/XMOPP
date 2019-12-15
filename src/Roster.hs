@@ -8,10 +8,12 @@ import Data.Conduit
 import Data.Conduit.Network
 import Data.Text (Text, pack, unpack, splitOn)
 import Data.XML.Types (Event(..), Content(..))
+import GHC.Conc (atomically)
 import Control.Monad.Catch
 import Control.Monad.Reader
 import Control.Monad.Logger
 import Control.Monad.IO.Unlift
+import qualified Control.Concurrent.STM.Map as STC
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Data.Map as M
@@ -19,33 +21,40 @@ import qualified Data.Map as M
 import XMPP
 import Stream
 import Concurrency
+import InternalMessaging
 import Utils
 import Users
 
-nameFromJid :: Text -> Maybe Text
+nameFromJid :: JID -> Maybe Text
 nameFromJid jid = case splitOn "@" jid of
                     [] -> Nothing
                     (name:_) -> Just name
+
+jidFromResource :: XMPPResource -> Maybe JID
+jidFromResource res = case splitOn "/" res of
+                        [] -> Nothing
+                        (jid:_) -> Just jid
 
 rosterNamespace :: Text
 rosterNamespace = "jabber:iq:roster"
 
 rosterHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
+  ChanMap ->
   ConduitT Element o m r ->
   Text ->
   Text ->
   Text ->
   ConduitT Event o m (Maybe r)
-rosterHandler sink i t from =
+rosterHandler cm sink i t from =
   case nameFromJid from of
     Nothing -> do
       logDebugN $ "Roster error: invalid from attr: " <> from
       return Nothing
-    Just owner -> join <$> tagNoAttr (matching (==rosterName)) (itemHandler owner)
+    Just owner -> join <$> tagNoAttr (matching (==rosterName)) (itemHandler cm owner)
   where
     rosterName = queryName rosterNamespace
     itemName = Name "item" (Just rosterNamespace) Nothing
-    itemHandler owner =
+    itemHandler cm owner =
       case t of
         "get" -> do
           db <- asks xmppDB
@@ -60,20 +69,34 @@ rosterHandler sink i t from =
                    (\(jid, subscription) -> return (jid, subscription == Just "remove"))
           case attrs of
             Nothing -> return Nothing
-            Just (name, remove) -> do
+            Just (jid, remove) -> do
               db <- asks xmppDB
               r <- liftIO $ runSqlite db $ if remove
-                                           then removeRoster owner name
-                                           else addRoster owner name
+                                           then removeRoster owner jid
+                                           else addRoster owner jid
               case r of
                 Nothing -> do
                   logDebugN $ "Roster error: user not found: " <> owner
                   return Nothing
                 Just _ -> do
                   r <- yield (iq i "result" from (fqdn def) $ []) .| sink
+                  fqdn <- asks fqdn
+                  let ownerJid = owner <> "@" <> fqdn
+                  if remove
+                    then do -- Their roster may still contain us.
+                    present <- isPresent cm jid
+                    updatePresenceTo cm jid (not present) ownerJid
+                    else -- Our roster will contain them.
+                    updatePresenceTo cm ownerJid False jid
                   return $ Just r
         _ ->
           return Nothing
+
+isPresent cm jid = liftIO . atomically $ do
+  mm <- STC.lookup jid cm
+  case mm of
+    Just (_, True, _) -> return True
+    _ -> return False
 
 rosterItems :: [Roster] -> [Node]
 rosterItems = fmap (\roster -> NodeElement $ Element
@@ -118,3 +141,56 @@ addRoster owner name = do
     Just (Entity ownerId _) -> do
       insert (Roster ownerId name)
       return $ Just name
+
+presenceName :: Name
+presenceName = Name {nameLocalName = "presence", nameNamespace = Just "jabber:client", namePrefix = Nothing}
+
+-- Handles the case when the presence of a resource has changed.
+updatePresence :: (MonadReader XMPPSettings m, MonadIO m, MonadLogger m) =>
+  ChanMap -> JID -> Bool -> m (Maybe ())
+updatePresence cm jid offline = do
+  case (nameFromJid jid) of
+    Just name -> do
+      -- Update the flag in the ChanMap.
+      liftIO . atomically $ do
+        mm <- STC.lookup jid cm
+        case mm of
+          Just (xs, _, m) -> STC.insert jid (xs, not offline, m) cm
+          _ -> return ()
+      -- Share presence with other users.
+      db <- asks xmppDB
+      roster <- liftIO $ runSqlite db $ getRoster name
+      forM (rosterName <$> roster) $ updatePresenceTo cm jid offline
+      return $ Just ()
+    _ -> return Nothing
+
+-- Exchange presence information between jid and jid'. jid is the user
+-- whose presence information just changed.
+updatePresenceTo :: (MonadReader XMPPSettings m, MonadIO m, MonadLogger m) =>
+  ChanMap -> JID -> Bool -> JID -> m ()
+updatePresenceTo cm jid offline jid' =
+  case nameFromJid jid' of
+    Nothing -> return ()
+    Just name' -> do
+      present <- isPresent cm jid'
+      when present $ do
+        db <- asks xmppDB
+        roster' <- liftIO $ runSqlite db $ getRoster name'
+        if jid `elem` (rosterName <$> roster')
+          then do
+          -- We're in their roster.
+          -- Send new presence status.
+          sendToJidAll cm jid' $ presenceElement jid jid' offline
+          -- If we're just coming online, receive presence status from our roster.
+          unless offline (sendToJidAll cm jid $ presenceElement jid' jid (not present))
+          else do
+          -- We're not in their roster. We should always look offline to each other.
+          sendToJidAll cm jid' $ presenceElement jid jid' True
+          sendToJidAll cm jid $ presenceElement jid' jid True
+  where
+    presenceElement from to offline = Element presenceName
+                         (M.union
+                           (M.fromList [("from", from), ("to", to)])
+                           (if offline
+                            then M.fromList [("type", "unavailable")]
+                            else M.empty)) []

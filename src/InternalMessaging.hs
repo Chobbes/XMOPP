@@ -50,7 +50,7 @@ sendToResource cm jid resource elem = do
     mm <- STC.lookup jid cm
     case mm of
       Nothing     -> return Nothing
-      Just (_, m) -> STC.lookup resource m
+      Just (_, _, m) -> STC.lookup resource m
   case mchan of
     Nothing   -> return ()
     Just chan -> liftIO . atomically $ writeTMChan chan elem
@@ -61,7 +61,7 @@ getJidChannels cm jid = do
   mm <- STC.lookup jid cm
   chans <- case mm of
              Nothing      -> return []
-             Just (rs, m) -> forM rs $ \r -> do
+             Just (rs, _, m) -> forM rs $ \r -> do
                maybeChan <- STC.lookup r m
                return $ maybeToList maybeChan
   return $ Prelude.concat chans

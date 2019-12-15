@@ -60,9 +60,7 @@ tmSink handler = do
   forkIO $ handler tmSource
   return (tmSink, chan)
 
-allocateChannel
-  :: (MonadIO m, Eq k1, Hashable k1, Eq k2, Hashable k2) =>
-     Map k1 ([k2], Map k2 (TMChan a)) -> k1 -> k2 -> m (TMChan a)
+allocateChannel :: MonadIO m => ChanMap -> JID -> XMPPResource -> m (TMChan Element)
 allocateChannel cm key resource = do
   chan <- liftIO newTMChanIO
   liftIO $ atomically $ do
@@ -71,21 +69,22 @@ allocateChannel cm key resource = do
       Nothing -> do
         m <- STC.empty
         STC.insert resource chan m
-        STC.insert key ([resource], m) cm
-      Just (rs, m) -> do
+        STC.insert key ([resource], True, m) cm
+      Just (rs, _, m) -> do
         STC.insert resource chan m
-        STC.insert key (resource:rs, m) cm
+        STC.insert key (resource:rs, True, m) cm
   return chan
 
 createHandledChannel
-  :: (MonadIO (t m), Eq k1, Hashable k1, Eq k2, Hashable k2, MonadTrans t, Monad m, MonadUnliftIO m) =>
-     Map k1 ([k2], Map k2 (TMChan a)) -> k1 -> k2 -> (TMChan a -> m b) -> t m ()
+  :: MonadUnliftIO m =>
+     ChanMap -> JID -> XMPPResource -> (TMChan Element -> m b) -> ConduitT i o m ()
 createHandledChannel cm key resource handler = do
   chan <- allocateChannel cm key resource
   void . lift . forkIO . void $ handler chan
 
 -- | Handler that forwards messages from a channel to a sink.
-forwardHandler :: (Show a, MonadIO m, MonadUnliftIO m) => ConduitT a o m r -> TMChan a -> m ()
+forwardHandler :: (Show i, MonadIO m, MonadUnliftIO m) =>
+  ConduitT i o m r -> TMChan i -> m ()
 forwardHandler sink chan = do
   elem <- liftIO $ atomically $ readTMChan chan
   case elem of
@@ -95,16 +94,15 @@ forwardHandler sink chan = do
 
 -- | Free an XMPP resource from map.
 freeResource
-  :: (MonadIO m, Eq k, Eq a, Hashable k, Hashable a) =>
-     Map k ([a], Map a v) -> k -> a -> m ()
+  :: MonadIO m => ChanMap -> JID -> XMPPResource -> m ()
 freeResource cm jid resource =
   liftIO . atomically $ do
     mm <- STC.lookup jid cm
     case mm of
       Nothing      -> return ()
-      Just (xs, m) ->
+      Just (xs, p, m) ->
         if length xs == 1
         then STC.delete jid cm
         else do
           STC.delete resource m
-          STC.insert jid (filter (/=resource) xs, m) cm
+          STC.insert jid (filter (/=resource) xs, p, m) cm
