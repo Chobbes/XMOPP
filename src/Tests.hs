@@ -10,10 +10,12 @@ import Data.Maybe
 import Data.UUID
 import qualified Data.ByteString as BS
 import Data.ByteString.Char8 (ByteString, pack, append)
+import qualified Data.ByteString.Base64 as BS64
 import Data.Conduit
 import Data.Default
 import Data.Conduit.List hiding (mapM_)
 import Data.Text as T (Text, unpack)
+import Data.Text.Encoding
 import Control.Concurrent.STM.TMVar
 import Control.Concurrent.STM.TMChan
 import qualified Control.Concurrent.STM.Map as STC
@@ -41,6 +43,7 @@ import System.Directory
 import Control.Exception
 import System.IO.Error
 import Control.Concurrent.STM.Map hiding (insert)
+import Control.Monad.Primitive
 
 import Main hiding (main)
 import XMPP
@@ -106,8 +109,8 @@ testChanMap = testChanMapSetup testUserResources
 
 -- | Set up DB with test users.
 testDBSetup
-  :: (MonadIO m, MonadReader XMPPSettings m) => Text -> m ()
-testDBSetup db = do
+  :: (MonadIO m, MonadReader XMPPSettings m) => m ()
+testDBSetup = do
   db <- asks xmppDB
   liftIO . runSqlite db $ insertUsers testUsers
 
@@ -130,6 +133,7 @@ cleanRunWithTestDB = do
   db <- asks xmppDB
   liftIO $ removeFileUncond (unpack db)
   runWithTestDB
+  testDBSetup
 
 -- | Create a test sink from a TMVar [i].
 testSink :: MonadIO m => TMVar [i] -> ConduitT i o m ()
@@ -145,7 +149,7 @@ testSink tv = do
 newTestSink :: (MonadIO m, MonadIO mc) => m (ConduitT i o mc (), TMVar [i])
 newTestSink = do
   tv <- liftIO newEmptyTMVarIO
-  return $ (testSink tv, tv)
+  return (testSink tv, tv)
 
 runTestConduit
   :: ConduitT () Void (ReaderT XMPPSettings (NoLoggingT IO)) a -> IO a
@@ -183,7 +187,7 @@ testReceiveMessage = TestList
       runConduit (yield msg .| parseBytes def .| receiveMessage messageBody)
 
 -- | Create a message with UUID.
-createMessage :: Text -> Text -> Text -> UUID -> Element
+createMessage :: JID -> JID -> Text -> UUID -> Element
 createMessage to from body uuid =
   Element "{jabber:client}message"
           (M.fromList [ ("from",from)
@@ -660,7 +664,11 @@ main = do
               , (test_iqHandler3, "iqHandler 3")
               , (test_iqHandler4, "iqHandler 4")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 1 to 2")
-              , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")]
+              , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")
+              , (runXMPP . runConduit $ testPlainAuth testUser1, "Test authentication of user 1")
+              , (runXMPP . runConduit $ testPlainAuth testUser2, "Test authentication of user 2")
+              , (not <$> (runXMPP . runConduit $ testPlainAuth (testUser1 {userPassword="bogus"})), "Test bad authentication.")
+              ]
 
     unitTests :: Test
     unitTests = TestList
@@ -687,13 +695,17 @@ main = do
       ]
 
 
-    runXMPP = runNoLoggingT . flip runReaderT testSettings
-
+--    runXMPP :: (MonadIO m, MonadThrow m, MonadReader XMPPSettings m, MonadLogger m) => m Bool -> m1 bool
     runTests [] = return ()
     runTests ((t, name):ts) = do
       result <- t
       print $ name ++ (if result then " passed" else " failed *******************")
       runTests ts
+
+runXMPP :: MonadIO m => ReaderT XMPPSettings (NoLoggingT m) a -> m a
+runXMPP xmpp = runNoLoggingT . flip runReaderT testSettings $ do
+  cleanRunWithTestDB
+  xmpp
 
 --------------------------------------------------
 -- Misc test stuff
@@ -717,3 +729,30 @@ eventConduitTest sink = do
 
 testElement = Element "message" (M.fromList [("to", "foo"), ("from", "calvin")]) []
 testDocument = Document emptyPrologue testElement []
+
+
+
+--------------------------------------------------
+-- Test handleClient'
+--------------------------------------------------
+
+-- | Create an XML message for login.
+createAuthStanza :: User -> Element
+createAuthStanza (User user pass) =
+  Element authName
+          (M.fromList [("mechanism","PLAIN")])
+          [ NodeContent authText ]
+  where authText = decodeUtf8 . BS64.encode $ mconcat [BS.singleton 0, userBS, BS.singleton 0, passBS]
+        userBS = encodeUtf8 user
+        passBS = encodeUtf8 pass
+
+-- | Test plainAuth with XML stanzas.
+testPlainAuth
+  :: (PrimMonad m, MonadThrow m, MonadReader XMPPSettings m, MonadUnliftIO m) =>
+     User -> ConduitT i o m Bool
+testPlainAuth user = do
+  (sink, tv) <- newTestSink
+  let authMsg = createAuthStanza user
+  let source = sourceList (elementToEvents (toXMLElement authMsg))
+  auth <- plainAuth source sink
+  return $ Just user == auth

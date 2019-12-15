@@ -20,6 +20,7 @@ import Data.XML.Types (Event(..), Content(..))
 import Text.XML hiding (parseText)
 import Text.XML.Stream.Parse
 import qualified Data.ByteString as BS
+import Debug.Trace
 
 import Users
 import XMPP
@@ -29,11 +30,18 @@ import Concurrency
 saslNamespace :: Text
 saslNamespace = "urn:ietf:params:xml:ns:xmpp-sasl"
 
+authName :: Name
+authName = Name { nameLocalName = "auth"
+                , nameNamespace = Just saslNamespace
+                , namePrefix = Nothing
+                }
+
 awaitAuth :: MonadThrow m => ConduitT Event o m (Maybe (Text, Text))
 awaitAuth = do
-  authStr <- tagIgnoreAttrs (matching (==(Name {nameLocalName = "auth", nameNamespace = Just saslNamespace, namePrefix = Nothing}))) content -- TODO check for mechanism='PLAIN'
+  authStr <- tagIgnoreAttrs (matching (==authName)) content -- TODO check for mechanism='PLAIN'
   return $ do
     auth <- authStr
+    traceShow (decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth)) (return ())
     case decodeUtf8 <$> (BS.split 0 . decodeLenient $ encodeUtf8 auth) of
       [_, user, pass] -> return (user, pass)
       _               -> Nothing
@@ -52,7 +60,7 @@ plainAuth source sink = do
     Just (user, pass) -> do
       db <- asks xmppDB -- TODO move db to an argument for testing?
       liftIO $ runSqlite db $ authenticate user pass
-    _ -> return Nothing
+    _ -> trace "uhoh" $ return Nothing
 
 authenticate :: (MonadIO m, PersistUniqueRead backend, BaseBackend backend ~ SqlBackend) =>
   Text -> Text -> ReaderT backend m (Maybe User)
