@@ -262,42 +262,34 @@ test_jidFromResource = TestList
   , jidFromResource "name" ~?= Nothing
   , jidFromResource "" ~?= Nothing ]
 
-test_rosterItems :: Test
-test_rosterItems = TestList
-  [ ] -- TODO
-
--- test_login_success :: Test
--- test_login_success = undefined
-
--- test_login_fail :: Test
--- test_login_fail = undefined
-
 ----------------------------
 -- Tests that require IO
 ----------------------------
 
 -- Stream tests
-test_openStream :: IO Bool
+test_openStream :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
 test_openStream = do
   (sink, tv) <- newTestSink
 
-  uuid <- randomIO
-  runTestConduit $ openStream uuid (yield "<anything/>" .| parseBytes def) sink
-  sent <- atomically $ tryTakeTMVar tv
+  uuid <- liftIO $ randomIO
+  liftIO $ runTestConduit $ openStream uuid (yield "<anything/>" .| parseBytes def) sink
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  fqdn <- asks fqdn
 
   return $ sent ==
-    Just [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+    Just [pack $ "<stream:stream from=" <> show fqdn <> " version=\"1.0\" id=\"" <> show uuid <> "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
-test_initiateStream :: IO Bool
+test_initiateStream :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
 test_initiateStream = do
   (sink, tv) <- newTestSink
 
-  uuid <- randomIO
-  runTestConduit $ initiateStream uuid sink
-  sent <- atomically $ tryTakeTMVar tv
+  uuid <- liftIO $ randomIO
+  liftIO $ runTestConduit $ initiateStream uuid sink
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  fqdn <- asks fqdn
 
   return $ sent ==
-    Just [pack $ "<stream:stream from=\"localhost\" version=\"1.0\" id=\"" ++ show uuid ++ "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
+    Just [pack $ "<stream:stream from=" <> show fqdn <> " version=\"1.0\" id=\"" <> show uuid <> "\" xmlns:xml=\"xml\" xml:lang=\"en\" xmlns:stream=\"http://etherx.jabber.org/streams\">"]
 
 --------------------------------------------------
 -- TLS tests
@@ -348,7 +340,7 @@ test_bindHandler1 = do
 
   cm <- atomically STC.empty
   -- not an iq stanza
-  r <- runTestConduit $ yield "<asdf/>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@localhost" sink)
+  r <- runTestConduit $ yield "<asdf/>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@domain" sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $ isNothing r && isNothing sent
@@ -359,7 +351,7 @@ test_bindHandler2 = do
 
   cm <- atomically STC.empty
   -- not of type set
-  r <- runTestConduit $ yield "<iq id=\"id\" type=\"get\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@localhost" sink)
+  r <- runTestConduit $ yield "<iq id=\"id\" type=\"get\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| receiveIqBind (bindHandler cm "test@domain" sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $ isNothing r && isNothing sent
@@ -369,45 +361,55 @@ test_bindHandler3 = do
   (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
-  r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
+  r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><resource>resourceid</resource></bind></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@domain" sink))
   sent <- atomically $ tryTakeTMVar tv
 
   return $
     r == Just "resourceid" &&
-    (fmap renderElement <$> sent) == Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/resourceid</jid></bind></iq>"]
+    (fmap renderElement <$> sent) == Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@domain/resourceid</jid></bind></iq>"]
 
 test_bindHandler4 :: IO Bool
 test_bindHandler4 = do
   (sink, tv) <- newTestSink
 
   cm <- atomically STC.empty
-  r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"/></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@localhost" sink))
+  r <- runTestConduit $ yield "<iq id=\"id\" type=\"set\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"/></iq>" .| parseBytes def .| (receiveIqBind (bindHandler cm "test@domain" sink))
   sent <- atomically $ tryTakeTMVar tv
 
   return $ (fmap renderElement <$> sent) ==
-    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@localhost/" <> pack (maybe "" T.unpack r) <> "</jid></bind></iq>"]
+    Just ["<iq id=\"id\" type=\"result\" xmlns=\"jabber:client\"><bind xmlns=\"urn:ietf:params:xml:ns:xmpp-bind\"><jid xmlns=\"\">test@domain/" <> pack (maybe "" T.unpack r) <> "</jid></bind></iq>"]
 
 --------------------------------------------------
 -- Other Iq tests
 --------------------------------------------------
 
--- wrap the handlers that require a to field to give a default one
-wrapHandler :: MonadThrow m =>
+-- wrap the handlers that take 4 fields to give a default one if needed
+wrapHandler4 :: MonadThrow m =>
   (Text -> Text -> Text -> Text -> ConduitT Event o m (Maybe r)) ->
   (Text -> Text -> Text -> Maybe Text -> ConduitT Event o m (Maybe r))
-wrapHandler handler a b c Nothing = handler a b c "default"
-wrapHandler handler a b c (Just d) = handler a b c d
+wrapHandler4 handler a b c Nothing = handler a b c "default"
+wrapHandler4 handler a b c (Just d) = handler a b c d
+
+-- wrap the handlers that take 3 fields to ignore the to field
+wrapHandler3 :: MonadThrow m =>
+  (Text -> Text -> Text -> ConduitT Event o m (Maybe r)) ->
+  (Text -> Text -> Text -> Maybe Text -> ConduitT Event o m (Maybe r))
+wrapHandler3 handler a b c _ = handler a b c
 
 --------------------------------------------------
 -- info
 --------------------------------------------------
+
+-- Note that in the case of handlers, if they do not consume all the input an
+-- exception will be thrown, so we do not tests those cases. This is OK since
+-- in the combined handler the last handler (error) will consume the input.
 
 test_infoHandler1 :: IO Bool
 test_infoHandler1 = do
   (sink, tv) <- newTestSink
 
   -- missing query
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler $ infoHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler4 $ infoHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $ r == Nothing && sent == Nothing
@@ -416,7 +418,7 @@ test_infoHandler2 :: IO Bool
 test_infoHandler2 = do
   (sink, tv) <- newTestSink
 
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler $ infoHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler4 $ infoHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $
@@ -432,7 +434,7 @@ test_itemsHandler1 = do
   (sink, tv) <- newTestSink
 
   -- missing query
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler $ itemsHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler4 $ itemsHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $ r == Nothing && sent == Nothing
@@ -441,7 +443,7 @@ test_itemsHandler2 :: IO Bool
 test_itemsHandler2 = do
   (sink, tv) <- newTestSink
 
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler $ itemsHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler4 $ itemsHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $
@@ -455,9 +457,8 @@ test_itemsHandler2 = do
 test_pingHandler1 :: IO Bool
 test_pingHandler1 = do
   (sink, tv) <- newTestSink
-
   -- missing ping
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler $ pingHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler4 $ pingHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $ isNothing r && isNothing sent
@@ -465,8 +466,7 @@ test_pingHandler1 = do
 test_pingHandler2 :: IO Bool
 test_pingHandler2 = do
   (sink, tv) <- newTestSink
-
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler $ pingHandler sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler4 $ pingHandler sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $
@@ -480,8 +480,7 @@ test_pingHandler2 = do
 test_iqError1 :: IO Bool
 test_iqError1 = do
   (sink, tv) <- newTestSink
-
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler $ iqError sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler4 $ iqError sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $
@@ -491,9 +490,8 @@ test_iqError1 = do
 test_iqError2 :: IO Bool
 test_iqError2 = do
   (sink, tv) <- newTestSink
-
   -- receiveIq should handle the case with no "to" attr properly
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler $ iqError sink)
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"/>" .| parseBytes def .| (receiveIq . wrapHandler4 $ iqError sink)
   sent <- atomically $ tryTakeTMVar tv
 
   return $
@@ -505,9 +503,8 @@ test_iqError2 = do
 test_iqHandler1 :: IO Bool
 test_iqHandler1 = do
   (sink, tv) <- newTestSink
-
-  -- info
   cm <- atomically STC.empty
+  -- info
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#info\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
 
@@ -518,9 +515,8 @@ test_iqHandler1 = do
 test_iqHandler2 :: IO Bool
 test_iqHandler2 = do
   (sink, tv) <- newTestSink
-
-  -- items
   cm <- atomically STC.empty
+  -- items
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><query xmlns=\"http://jabber.org/protocol/disco#items\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
 
@@ -531,9 +527,8 @@ test_iqHandler2 = do
 test_iqHandler3 :: IO Bool
 test_iqHandler3 = do
   (sink, tv) <- newTestSink
-
-  -- ping
   cm <- atomically STC.empty
+  -- ping
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
 
@@ -544,9 +539,8 @@ test_iqHandler3 = do
 test_iqHandler4 :: IO Bool
 test_iqHandler4 = do
   (sink, tv) <- newTestSink
-
-  -- no query
   cm <- atomically STC.empty
+  -- no query
   r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" to=\"t\" from=\"f\"/>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
   sent <- atomically $ tryTakeTMVar tv
 
@@ -554,28 +548,54 @@ test_iqHandler4 = do
     r == Just () &&
     (fmap renderElement <$> sent) == Just ["<iq from=\"t\" id=\"id\" to=\"f\" type=\"error\" xmlns=\"jabber:client\"/>"]
 
-test_iqHandler5 :: IO Bool
+test_iqHandler5 :: (MonadIO m, MonadReader XMPPSettings m) => m Bool
 test_iqHandler5 = do
   (sink, tv) <- newTestSink
-
+  cm <- liftIO $ atomically STC.empty
   -- no to field
-  cm <- atomically STC.empty
-  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
-  sent <- atomically $ tryTakeTMVar tv
+  r <- liftIO $ runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"f\"><ping xmlns=\"urn:xmpp:ping\"/></iq>" .| parseBytes def .| (receiveIq (iqHandler cm sink))
+  sent <- liftIO $ atomically $ tryTakeTMVar tv
+  fqdn <- asks fqdn
 
   return $
     r == Just () &&
-    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> (encodeUtf8 $ fqdn def) <> "\" id=\"id\" to=\"f\" type=\"error\" xmlns=\"jabber:client\"/>"]
+    (fmap renderElement <$> sent) == Just ["<iq from=\"" <> encodeUtf8 fqdn <> "\" id=\"id\" to=\"f\" type=\"error\" xmlns=\"jabber:client\"/>"]
 
 --------------------------------------------------
 -- roster
 --------------------------------------------------
 
 test_rosterHandler1 :: IO Bool
-test_rosterHandler1 = return True
+test_rosterHandler1 = do
+  (sink, tv) <- newTestSink
+  cm <- atomically STC.empty
+  -- no query
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"name@domain/res\"/>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- atomically $ tryTakeTMVar tv
+
+  return $ isNothing r && isNothing sent
+
+test_rosterHandler2 :: IO Bool
+test_rosterHandler2 = do
+  (sink, tv) <- newTestSink
+  cm <- atomically STC.empty
+
+  r <- runTestConduit $ yield "<iq xmlns=\"jabber:client\" id=\"id\" type=\"get\" from=\"name@domain/res\"><query xmlns=\"jabber:iq:roster\"/></iq>" .| parseBytes def .| (receiveIq . wrapHandler3 $ rosterHandler cm sink)
+  sent <- atomically $ tryTakeTMVar tv
+
+  print (fmap renderElement <$> sent)
+
+  return $
+    r == Just () &&
+    -- (fmap renderElement <$> sent) == Just ["<iq from=\"" <> (encodeUtf8 $ fqdn def) <> "\" id=\"id
+    True
 
 test_isPresent :: IO Bool
 test_isPresent = return True
+
+-- This has to be in IO because we can't generate Entities without real keys from the DB.
+test_rosterItems :: IO Bool
+test_rosterItems = return True
 
 test_getRoster :: IO Bool
 test_getRoster = return True
@@ -604,8 +624,8 @@ main = do
   runTestTT unitTests
   runTests ioTests
   where
-    ioTests = [ (test_initiateStream, "initiateStream")
-              , (test_openStream, "openStream")
+    ioTests = [ (runXMPPNoDB . runConduit $ test_initiateStream, "initiateStream")
+              , (runXMPPNoDB . runConduit $ test_openStream, "openStream")
               , (test_startTLS, "startTLS")
               , (test_authenticate1, "authenticate 1")
               , (test_authenticate2, "authenticate 2")
@@ -625,7 +645,9 @@ main = do
               , (test_iqHandler2, "iqHandler 2")
               , (test_iqHandler3, "iqHandler 3")
               , (test_iqHandler4, "iqHandler 4")
-              , (test_iqHandler5, "iqHandler 5")
+              , (runXMPPNoDB . runConduit $ test_iqHandler5, "iqHandler 5")
+              , (test_rosterHandler1, "rosterhandler1")
+              , (test_rosterHandler2, "rosterhandler2")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 1 to 2")
               , (runXMPP $ testMessaging testUser1 testUser2, "Test Messages from 2 to 1")
               , (runXMPP . runConduit $ testPlainAuth testUser1, "Test authentication of user 1")
@@ -666,6 +688,10 @@ main = do
       result <- t
       print $ name ++ (if result then " passed" else " failed *******************")
       runTests ts
+
+runXMPPNoDB :: MonadIO m => ReaderT XMPPSettings (NoLoggingT m) a -> m a
+runXMPPNoDB xmpp = runNoLoggingT . flip runReaderT testSettings $ do
+  xmpp
 
 runXMPP :: MonadIO m => ReaderT XMPPSettings (NoLoggingT m) a -> m a
 runXMPP xmpp = runNoLoggingT . flip runReaderT testSettings $ do
