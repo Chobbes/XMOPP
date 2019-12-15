@@ -50,7 +50,7 @@ import XMPP
 import Users
 import Concurrency
 import SASL
-
+import Stream
 
 --------------------------------------------------
 -- Test utilities / setup
@@ -174,3 +174,8 @@ createMessage to from body uuid =
           , NodeElement (Element "{urn:xmpp:receipts}request" mempty [])
           , NodeElement (Element "{jabber:client}thread" mempty [NodeContent "testThreadId"])
           ]
+
+-- | Open a stream.
+createOpenStream :: Text -> Event
+createOpenStream fqdn =
+  EventBeginElement streamName [("to", [ContentText fqdn])]
