@@ -43,7 +43,7 @@ rosterHandler :: (MonadThrow m, MonadLogger m, MonadReader XMPPSettings m, Monad
   ConduitT Element o m r ->
   Text ->
   Text ->
-  Text ->
+  JID ->
   ConduitT Event o m (Maybe r)
 rosterHandler cm sink i t from =
   case nameFromJid from of
@@ -107,7 +107,7 @@ getRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistQueryRead backend,
               BaseBackend backend ~ SqlBackend) =>
-  Text -> ReaderT backend m [Roster]
+  JID -> ReaderT backend m [Roster]
 getRoster name = do
   userEntity <- getBy (UniqueName name)
   case userEntity of
@@ -118,7 +118,7 @@ removeRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistQueryWrite backend,
               BaseBackend backend ~ SqlBackend) =>
-     Text -> Text -> ReaderT backend m (Maybe Text)
+     JID -> JID -> ReaderT backend m (Maybe Text)
 removeRoster owner jid = do
   ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
@@ -132,7 +132,7 @@ addRoster :: (MonadIO m,
               PersistUniqueRead backend,
               PersistStoreWrite backend,
               BaseBackend backend ~ SqlBackend) =>
-     Text -> Text -> ReaderT backend m (Maybe Text)
+     JID -> JID -> ReaderT backend m (Maybe Text)
 addRoster owner name = do
   ownerEntity <- getBy (UniqueName owner)
   case ownerEntity of
