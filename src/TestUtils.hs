@@ -25,7 +25,7 @@ import GHC.Conc (atomically, forkIO, STM)
 
 import Data.Conduit
 import Data.Conduit.TMChan
-import Data.Conduit.List hiding (mapM_)
+import Data.Conduit.List hiding (mapM_, concatMap)
 
 import Database.Persist
 import Database.Persist.Sqlite
@@ -51,6 +51,8 @@ import Users
 import Concurrency
 import SASL
 import Stream
+import Iq
+import Utils
 
 --------------------------------------------------
 -- Test utilities / setup
@@ -179,3 +181,25 @@ createMessage to from body uuid =
 createOpenStream :: Text -> Event
 createOpenStream fqdn =
   EventBeginElement streamName [("to", [ContentText fqdn])]
+
+-- | Create iq element.
+createIq :: Text -> UUID -> [Node] -> Element
+createIq t uuid =
+  Element "iq"
+          (M.fromList [ ("type", t)
+                      , ("id", toText uuid)
+                      ])
+
+-- | Create element for bind
+createBind :: XMPPResource -> UUID -> Element
+createBind resource uuid = createIq "set" uuid [NodeElement bindElem]
+  where
+    bindElem     = Element bindName mempty [NodeElement resourceElem]
+    resourceElem = Element "{urn:ietf:params:xml:ns:xmpp-bind}resource" mempty [NodeContent resource]
+
+
+-- | Create a source out of a list of elements.
+elementsToSource
+  :: (Monad m, Foldable t) => t Element -> ConduitT i Event m ()
+elementsToSource elems =
+  sourceList $ concatMap (elementToEvents . toXMLElement) elems

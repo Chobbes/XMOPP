@@ -1125,6 +1125,7 @@ main = do
               , (runXMPP . runConduit $ testPlainAuth testUser1, "Test authentication of user 1")
               , (runXMPP . runConduit $ testPlainAuth testUser2, "Test authentication of user 2")
               , (not <$> (runXMPP . runConduit $ testPlainAuth (testUser1 {userPassword="bogus"})), "Test bad authentication.")
+--              , (runXMPP $ testHandleClient testUser1 testUser2, "Test handleClient")
               ]
 
     unitTests :: Test
@@ -1206,15 +1207,35 @@ testPlainAuth user = do
   return $ Just user == auth
 
 -- | Test handleClient with some messages.
-testHandleClient ::
-  (MonadThrow m, PrimMonad m, MonadReader XMPPSettings m, MonadUnliftIO m, MonadLogger m) =>
-  User -> m ()
-testHandleClient user = do
-  (bytesink, tv) <- newTestSink
-  (sink, chan) <- forkSink bytesink
+testHandleClient user toUser = do
+  (bytesink, bytetv) <- newTestSink
+  (sink, tv)         <- newTestSink
   cm <- testChanMap
   dn <- asks fqdn
 
-  let authMsg = createAuthStanza user
-  let source = sourceList (createOpenStream dn : elementToEvents (toXMLElement authMsg))
+  uuid <- liftIO randomIO
+  let authMsg   = createAuthStanza user
+  let bindMsg   = createBind "testreeoauouasource" uuid
+  let message   = createMessage (userName toUser) (userName user) "yoohoo" uuid
+
+  -- Create a source with all of the client messages.
+  let events = [createOpenStream dn] ++ (elementToEvents . toXMLElement) authMsg ++ [createOpenStream dn] ++ Prelude.concatMap (elementToEvents . toXMLElement) [bindMsg, message]
+  let source = sourceList events
   handleClient' handleStreamDefault cm source sink bytesink
+
+  sentmaybe <- liftIO . atomically $ tryTakeTMVar tv
+
+  let sent = fromJust sentmaybe
+
+  let authFeatures = sent !! 1
+  let authResult   = sent !! 2
+  let bindFeatures = sent !! 3
+  liftIO $ print sent
+
+  -- Fetch message
+  channels <- liftIO . atomically $ getJidChannels cm (userJid dn toUser)
+  liftIO $ putStrLn "grrrr"
+  elems <- liftIO . atomically $ readAllChannels channels
+
+  -- Make sure message matches what we sent
+  return $ Prelude.all (==Just message) elems
